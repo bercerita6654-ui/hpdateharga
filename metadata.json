@@ -1,0 +1,6 @@
+{
+  "name": "MarpApps Pricing",
+  "description": "Sistem kalkulasi, pengajuan, dan perbandingan harga produk di marketplace Shopee, Tokopedia, dll.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
