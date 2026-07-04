@@ -30,6 +30,7 @@ interface CartTableProps {
   useSmartMargin?: boolean;
   setUseSmartMargin?: (val: boolean) => void;
   applySmartMarginsToCart?: () => void;
+  autoFixLossCartProducts?: () => void;
   fees?: Fees;
 }
 
@@ -54,6 +55,7 @@ export default function CartTable({
   useSmartMargin = false,
   setUseSmartMargin,
   applySmartMarginsToCart,
+  autoFixLossCartProducts,
   fees
 }: CartTableProps) {
   const [confirmClear, setConfirmClear] = useState(false);
@@ -80,6 +82,11 @@ export default function CartTable({
     const netProfit = netPayout - item.hpp;
     return item.sellingPrice > 0 ? (netProfit / item.sellingPrice) * 100 : 0;
   };
+
+  const lossItemsCount = cart.filter(item => {
+    const margin = getActualNetMargin(item);
+    return margin < 0;
+  }).length;
 
   return (
     <div className="bg-white rounded-xl overflow-hidden shadow-sm border border-slate-200">
@@ -193,6 +200,30 @@ export default function CartTable({
           )}
         </div>
       </div>
+
+      {lossItemsCount > 0 && autoFixLossCartProducts && (
+        <div className="bg-rose-50 border-b border-rose-200 px-4 py-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 animate-in fade-in slide-in-from-top-4 duration-300">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-rose-100 text-rose-700 rounded-xl border border-rose-200/50 shadow-sm flex items-center justify-center">
+              <Sparkles className="w-4 h-4 text-rose-600 animate-pulse" />
+            </div>
+            <div>
+              <div className="text-xs font-bold text-rose-800">
+                Terdeteksi {lossItemsCount} Produk Rugi Bersih!
+              </div>
+              <div className="text-[10px] text-rose-600 font-medium mt-0.5">
+                Ada produk di keranjang yang harga jualnya tidak menutupi HPP & biaya potongan marketplace.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={autoFixLossCartProducts}
+            className="w-full sm:w-auto px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-md active:scale-95 flex items-center justify-center gap-2 hover:shadow-rose-100 cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5" /> Perbaiki Otomatis (Auto-Fix)
+          </button>
+        </div>
+      )}
 
       {cart.length > 0 && (
         <div className="flex justify-between items-center bg-slate-50 px-4 py-2.5 border-b border-slate-200">

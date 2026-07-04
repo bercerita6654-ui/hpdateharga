@@ -339,6 +339,69 @@ export default function App() {
     showNotif('Smart Margin berhasil diterapkan ke semua item di keranjang!');
   };
 
+  const autoFixLossCartProducts = () => {
+    let fixCount = 0;
+    
+    // Calculate total percent fees
+    const totalPercentFee =
+      (Number(fees.adminFee) || 0) +
+      (Number(fees.layananXtra) || 0) +
+      (Number(fees.insurance) || 0) +
+      (Number(fees.komisiAMS) || 0) +
+      (Number(fees.campaignFee) || 0);
+
+    const decimal = totalPercentFee / 100;
+
+    setCart(prevCart =>
+      prevCart.map(item => {
+        const itemProcFee = Number(item.processingFee) || 0;
+        const itemPackFee = Number(item.packingFee) || 0;
+
+        const totalFees = (item.sellingPrice * decimal) + itemProcFee + itemPackFee;
+        const netPayout = item.sellingPrice - totalFees;
+        const netProfit = netPayout - item.hpp;
+
+        if (netProfit < 0) {
+          // Get category margin
+          const categoryMargin = getSmartMarginForSku(item.sku);
+          // Set target margin: "margin minimal 20% atau margin kategori yang ditentukan"
+          const targetMargin = Math.max(20, categoryMargin);
+
+          const prices = calculateItemPrices(
+            item.hpp,
+            targetMargin,
+            itemProcFee,
+            itemPackFee,
+            item.customQtyValue,
+            rounding,
+            item.partai
+          );
+
+          fixCount++;
+          return {
+            ...item,
+            margin: targetMargin,
+            sellingPrice: prices.sellingPrice,
+            priceMin3: prices.priceMin3,
+            priceMin6: prices.priceMin6,
+            priceMin12: prices.priceMin12,
+            priceCustom: prices.priceCustom
+          };
+        }
+        return item;
+      })
+    );
+
+    // Dynamic message depending on action
+    setTimeout(() => {
+      if (fixCount > 0) {
+        showNotif(`Berhasil memperbaiki ${fixCount} produk rugi! Margin dinaikkan ke minimal 20% atau sesuai kategori.`);
+      } else {
+        showNotif('Semua produk di keranjang sudah aman (tidak ada yang rugi).');
+      }
+    }, 100);
+  };
+
   const [customQty, setCustomQty] = useState(24);
   const [showCustomQty, setShowCustomQty] = useState(false);
   const [showProductList, setShowProductList] = useState(false);
@@ -2497,6 +2560,7 @@ export default function App() {
                 useSmartMargin={useSmartMargin}
                 setUseSmartMargin={setUseSmartMargin}
                 applySmartMarginsToCart={applySmartMarginsToCart}
+                autoFixLossCartProducts={autoFixLossCartProducts}
                 fees={fees}
               />
 

@@ -104,6 +104,7 @@ export default function ShopeeTab({
   const [displayLimit, setDisplayLimit] = useState(50);
 
   const [includeFeesAndCampaign, setIncludeFeesAndCampaign] = useState(true);
+  const [autoFixLossProducts, setAutoFixLossProducts] = useState(true);
   const [exportMarginType, setExportMarginType] = useState<string>('smart');
   const [exportMarginVal, setExportMarginVal] = useState<number>(10);
   const [exportBaseType, setExportBaseType] = useState<'hpp' | 'eceran' | 'grosir' | 'partai'>('hpp');
@@ -212,6 +213,55 @@ export default function ShopeeTab({
           finalPrice = Math.ceil(rawPrice / 1000) * 1000;
         } else {
           finalPrice = Math.round(rawPrice);
+        }
+      }
+
+      // Auto-Fix Loss-making products if enabled
+      if (autoFixLossProducts && item.matchedProduct) {
+        const systemHpp = item.matchedProduct.hpp || 0;
+        const percentFees =
+          (Number(fees?.adminFee) || 0) +
+          (Number(fees?.layananXtra) || 0) +
+          (Number(fees?.insurance) || 0) +
+          (Number(fees?.komisiAMS) || 0) +
+          (Number(fees?.campaignFee) || 0);
+
+        const fixedFees =
+          (Number(fees?.marketplaceProcessingFee) || 0) +
+          (Number(fees?.jubelioProcessingFee) || 0) +
+          (Number(fees?.packingFee) || 0);
+
+        const decimal = percentFees / 100;
+        
+        // Calculate net payout for the finalPrice
+        const currentFees = finalPrice * decimal + fixedFees;
+        const currentNetPayout = finalPrice - currentFees;
+        const currentNetProfit = currentNetPayout - systemHpp;
+
+        if (currentNetProfit < 0) {
+          // Calculate the minimum price to avoid loss (net profit = 0)
+          let minRawPrice = 0;
+          if (1 - decimal > 0) {
+            minRawPrice = (systemHpp + fixedFees) / (1 - decimal);
+          } else {
+            minRawPrice = systemHpp * (1 + decimal) + fixedFees;
+          }
+
+          let minPrice = 0;
+          // Apply active rounding
+          if (rounding === '100') {
+            minPrice = Math.ceil(minRawPrice / 100) * 100;
+          } else if (rounding === '500') {
+            minPrice = Math.ceil(minRawPrice / 500) * 500;
+          } else if (rounding === '1000') {
+            minPrice = Math.ceil(minRawPrice / 1000) * 1000;
+          } else {
+            minPrice = Math.ceil(minRawPrice);
+          }
+
+          if (finalPrice < minPrice) {
+            finalPrice = minPrice;
+          }
         }
       }
 
@@ -915,6 +965,17 @@ export default function ShopeeTab({
                 Include Biaya Marketplace & Campaign
               </label>
 
+              {/* TOGGLE FOR AUTO-FIXING LOSS-MAKING PRODUCTS */}
+              <label className="inline-flex items-center gap-2.5 bg-white border border-rose-200 px-4 py-2.5 rounded-xl text-xs font-bold text-rose-700 shadow-sm cursor-pointer hover:bg-rose-50 select-none transition-all">
+                <input
+                  type="checkbox"
+                  checked={autoFixLossProducts}
+                  onChange={e => setAutoFixLossProducts(e.target.checked)}
+                  className="w-4 h-4 text-rose-600 border-rose-300 rounded focus:ring-rose-500 cursor-pointer"
+                />
+                Perbaiki Otomatis Produk Rugi Bersih
+              </label>
+
               {includeFeesAndCampaign && (
                 <>
                   <div className="flex items-center gap-2 bg-white border border-slate-200 p-1.5 px-3 rounded-xl shadow-sm text-xs">
@@ -990,6 +1051,11 @@ export default function ShopeeTab({
               <ul className="list-disc pl-4 space-y-0.5 mt-1">
                 <li>Mencakup Total Biaya Persentase ({((Number(fees?.adminFee) || 0) + (Number(fees?.layananXtra) || 0) + (Number(fees?.insurance) || 0) + (Number(fees?.komisiAMS) || 0) + (Number(fees?.campaignFee) || 0)).toFixed(1)}%): Admin, Layanan Xtra, Asuransi, Komisi AMS, dan Campaign ({fees?.campaignFee || 0}%).</li>
                 <li>Mencakup Biaya Nominal (Rp): Marketplace & Jubelio ({formatIDR((Number(fees?.marketplaceProcessingFee) || 0) + (Number(fees?.jubelioProcessingFee) || 0))}) serta Packing ({formatIDR(Number(fees?.packingFee) || 0)}).</li>
+                {autoFixLossProducts && (
+                  <li className="text-rose-700 font-bold bg-rose-50/50 p-1 px-2 rounded border border-rose-200/50">
+                    ⚠️ Perbaikan Otomatis Aktif: Setiap produk yang terdeteksi menghasilkan Rugi Bersih akan dinaikkan harganya secara otomatis ke batas aman (break-even point setelah potongan biaya) agar Anda TIDAK mengalami kerugian.
+                  </li>
+                )}
                 <li>Metode Pembulatan mengikuti pengaturan aktif: <span className="font-bold font-mono text-emerald-900">{rounding === 'none' ? 'Sesuai Rumus' : rounding === '100' ? 'Bulat 100' : rounding === '500' ? 'Bulat 500' : 'Bulat 1000'}</span>.</li>
                 <li>Menggunakan <span className="font-bold">Reverse Fee Calculation</span> yang sangat presisi (menjamin laba bersih setelah potongan biaya marketplace sesuai target net payout).</li>
                 <li>Produk {shopName} yang tidak memiliki kecocokan di database sistem akan tetap menggunakan harga asli {shopName} agar tidak merusak data.</li>
@@ -1223,27 +1289,23 @@ export default function ShopeeTab({
 
         {/* COMPARISON TABLE */}
         <div className="overflow-x-auto custom-scrollbar">
-          <table className="w-full text-left whitespace-nowrap border-collapse">
+          <table className="w-full text-left border-collapse text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500">
               {shopeeTabMode === 'price' ? (
                 <tr>
-                  <th className="p-4 min-w-[280px]">Produk {shopName}</th>
-                  <th className="p-4">SKU Induk (Col 5)</th>
-                  <th className="p-4">SKU Variasi (Col 6)</th>
+                  <th className="p-4 min-w-[200px] max-w-[240px]">Produk {shopName}</th>
+                  <th className="p-4">SKU Shopee (Induk / Var)</th>
                   <th className="p-4 text-right bg-indigo-50/30">Harga {shopName}</th>
-                  <th className="p-4 border-l border-slate-200">Kecocokan Sistem</th>
-                  <th className="p-4 text-right">HPP Sistem</th>
-                  <th className="p-4 text-right">Eceran Sistem</th>
+                  <th className="p-4 border-l border-slate-200">Kecocokan Master (HPP & Eceran)</th>
                   <th className="p-4 text-center">Analisa / Selisih</th>
                   <th className="p-4 text-center">Aksi</th>
                 </tr>
               ) : (
                 <tr>
-                  <th className="p-4 min-w-[280px]">Produk {shopName}</th>
-                  <th className="p-4">SKU Induk (Col 5)</th>
-                  <th className="p-4">SKU Variasi (Col 6)</th>
+                  <th className="p-4 min-w-[200px] max-w-[240px]">Produk {shopName}</th>
+                  <th className="p-4">SKU Shopee (Induk / Var)</th>
                   <th className="p-4 text-center bg-indigo-50/30">Stok Sheet</th>
-                  <th className="p-4 border-l border-slate-200">Kecocokan Sistem</th>
+                  <th className="p-4 border-l border-slate-200">Kecocokan Master</th>
                   <th className="p-4 text-right pr-8">Update Stok Baru</th>
                   <th className="p-4 text-center">Status & Batal</th>
                 </tr>
@@ -1252,7 +1314,7 @@ export default function ShopeeTab({
             <tbody className="divide-y divide-slate-100">
               {isLoading ? (
                 <tr>
-                  <td colSpan={shopeeTabMode === 'price' ? 9 : 7} className="p-12 text-center text-slate-500">
+                  <td colSpan={6} className="p-12 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <RefreshCw className="w-6 h-6 animate-spin text-indigo-600" />
                       <span className="text-xs font-semibold">Mengunduh & menganalisa data {shopName}...</span>
@@ -1261,7 +1323,7 @@ export default function ShopeeTab({
                 </tr>
               ) : filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={shopeeTabMode === 'price' ? 9 : 7} className="p-12 text-center text-slate-400 text-sm font-semibold">
+                  <td colSpan={6} className="p-12 text-center text-slate-400 text-sm font-semibold">
                     Tidak ditemukan data produk {shopName} yang cocok dengan kriteria filter.
                   </td>
                 </tr>
@@ -1272,39 +1334,46 @@ export default function ShopeeTab({
 
                   return (
                     <tr key={`${item.productId}-${item.variationId}-${idx}`} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="p-4 max-w-[320px]">
-                        <div className="font-bold text-xs text-slate-800 truncate" title={item.productName}>
+                      <td className="p-4 max-w-[240px]">
+                        <div className="font-bold text-xs text-slate-800 line-clamp-2 leading-relaxed whitespace-normal" title={item.productName}>
                           {item.productName}
                         </div>
                         {item.variationName && (
-                          <div className="text-[10px] text-indigo-600 font-semibold mt-0.5 truncate">
-                            Variasi: {item.variationName}
+                          <div className="text-[10px] text-indigo-600 font-bold mt-1 bg-indigo-50/50 px-1.5 py-0.5 rounded border border-indigo-100/40 inline-block max-w-full truncate" title={item.variationName}>
+                            Var: {item.variationName}
                           </div>
                         )}
-                        <div className="text-[9px] text-slate-400 mt-0.5 font-mono">
+                        <div className="text-[9px] text-slate-400 mt-1 font-mono">
                           ID: {item.productId} {item.variationId && `/ Var: ${item.variationId}`}
                         </div>
                       </td>
-                      <td className="p-4 font-mono text-xs font-bold text-slate-600">
-                        {item.parentSku || '-'}
-                      </td>
-                      <td className="p-4 font-mono text-xs font-bold text-slate-600">
-                        {item.variationSku || '-'}
+                      <td className="p-4 font-mono text-[11px] text-slate-600 leading-normal">
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-[9px] text-slate-400 font-sans uppercase font-bold tracking-wider">Induk:</span>
+                          <span className="font-bold text-slate-700 truncate max-w-[120px]" title={item.parentSku || '-'}>{item.parentSku || '-'}</span>
+                          <span className="text-[9px] text-slate-400 font-sans uppercase font-bold tracking-wider mt-1">Variasi:</span>
+                          <span className="font-bold text-slate-700 truncate max-w-[120px]" title={item.variationSku || '-'}>{item.variationSku || '-'}</span>
+                        </div>
                       </td>
                       {shopeeTabMode === 'price' ? (
                         <>
-                          <td className="p-4 text-right bg-indigo-50/10 font-black text-xs text-indigo-700">
+                          <td className="p-4 text-right bg-indigo-50/10 font-black text-xs text-indigo-700 font-mono">
                             {formatIDR(item.price)}
                           </td>
                           <td className="p-4 border-l border-slate-100">
                             {hasMatch ? (
-                              <div className="max-w-[200px]">
-                                <div className="font-semibold text-xs text-emerald-700 flex items-center gap-1">
+                              <div className="max-w-[220px] flex flex-col gap-1.5">
+                                <div className="font-bold text-xs text-emerald-700 flex items-center gap-1">
                                   <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
-                                  {matchingSku}
+                                  <span className="truncate" title={matchingSku || ''}>{matchingSku}</span>
                                 </div>
-                                <div className="text-[10px] text-slate-500 truncate" title={item.matchedProduct?.name}>
+                                <div className="text-[10px] text-slate-500 line-clamp-1 whitespace-normal" title={item.matchedProduct?.name}>
                                   {item.matchedProduct?.name}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] font-mono font-bold text-slate-500 mt-1 bg-slate-50 p-1 px-1.5 rounded border border-slate-200/50">
+                                  <span>HPP: <strong className="text-slate-700">{formatIDR(item.matchedProduct?.hpp || 0)}</strong></span>
+                                  <span className="text-slate-300">|</span>
+                                  <span>Eceran: <strong className="text-indigo-600">{formatIDR(item.matchedProduct?.eceran || 0)}</strong></span>
                                 </div>
                               </div>
                             ) : (
@@ -1313,32 +1382,26 @@ export default function ShopeeTab({
                               </span>
                             )}
                           </td>
-                          <td className="p-4 text-right font-mono text-xs text-slate-600">
-                            {hasMatch && item.matchedProduct?.hpp !== undefined ? formatIDR(item.matchedProduct.hpp) : '-'}
-                          </td>
-                          <td className="p-4 text-right font-mono text-xs text-slate-600">
-                            {hasMatch && item.matchedProduct?.eceran !== undefined ? formatIDR(item.matchedProduct.eceran) : '-'}
-                          </td>
                           <td className="p-4 align-middle">
                             {!hasMatch ? (
                               <span className="text-[9px] font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded-md block text-center w-20 mx-auto">
                                 N/A
                               </span>
                             ) : (
-                              <div className="flex flex-col gap-1.5 min-w-[175px] text-xs">
+                              <div className="flex flex-col gap-1.5 min-w-[190px] text-xs bg-slate-50/60 p-2.5 rounded-xl border border-slate-200/60">
                                 {/* Comparison to Retail Price */}
-                                <div className="flex items-center justify-between text-[10px] text-slate-500 border-b border-slate-100 pb-1">
-                                  <span>vs Eceran:</span>
+                                <div className="flex items-center justify-between text-[10px] text-slate-500 border-b border-slate-200/40 pb-1">
+                                  <span className="font-semibold">vs Eceran:</span>
                                   {item.status === 'under_hpp' ? (
-                                    <span className="font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded text-[9px]">
+                                    <span className="font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded text-[9px] whitespace-normal">
                                       🚨 Di Bawah HPP
                                     </span>
                                   ) : item.status === 'under_retail' ? (
-                                    <span className="font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded text-[9px]">
+                                    <span className="font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded text-[9px] whitespace-normal">
                                       📉 Di Bawah Eceran
                                     </span>
                                   ) : (
-                                    <span className="font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[9px]">
+                                    <span className="font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[9px] whitespace-normal">
                                       📈 Di Atas Eceran
                                     </span>
                                   )}
@@ -1347,13 +1410,13 @@ export default function ShopeeTab({
                                 {/* Net Profit Analysis */}
                                 <div className="space-y-1">
                                   <div className="flex items-center justify-between text-[10px] text-slate-500">
-                                    <span>Profit Bersih:</span>
+                                    <span className="font-semibold">Profit Bersih:</span>
                                     {item.isNetProfit ? (
                                       <span className="font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded text-[9px] flex items-center gap-0.5">
                                         <TrendingUp className="w-2.5 h-2.5" /> UNTUNG
                                       </span>
                                     ) : (
-                                      <span className="font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded text-[9px] flex items-center gap-0.5">
+                                      <span className="font-bold text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded text-[9px] flex items-center gap-0.5 animate-pulse">
                                         <AlertTriangle className="w-2.5 h-2.5" /> RUGI BERSIH
                                       </span>
                                     )}
@@ -1364,8 +1427,8 @@ export default function ShopeeTab({
                                       {item.isNetProfit ? '+' : ''}{formatIDR(item.netProfit)}
                                     </span>
                                   </div>
-                                  <div className="text-right text-[9px] font-mono text-slate-400 leading-none">
-                                    Margin: {item.netMargin.toFixed(1)}%
+                                  <div className="text-right text-[9px] font-mono text-slate-500 leading-none">
+                                    Margin: <span className={item.isNetProfit ? 'text-emerald-600 font-bold' : 'text-rose-600 font-bold'}>{item.netMargin.toFixed(1)}%</span>
                                   </div>
                                 </div>
                               </div>
@@ -1380,7 +1443,7 @@ export default function ShopeeTab({
                                   item.matchedProduct!.hpp || 0, 
                                   item.matchedProduct!.eceran
                                 )}
-                                className="bg-indigo-50 hover:bg-indigo-600 text-indigo-600 hover:text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all duration-150 active:scale-95 flex items-center gap-1 mx-auto"
+                                className="bg-indigo-50 hover:bg-indigo-600 text-indigo-600 hover:text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all duration-150 active:scale-95 flex items-center gap-1 mx-auto cursor-pointer"
                               >
                                 Kalkulator <ChevronRight className="w-3 h-3" />
                               </button>
@@ -1389,17 +1452,17 @@ export default function ShopeeTab({
                         </>
                       ) : (
                         <>
-                          <td className="p-4 text-center bg-indigo-50/10 font-bold text-xs text-indigo-700">
+                          <td className="p-4 text-center bg-indigo-50/10 font-bold text-xs text-indigo-700 font-mono">
                             {item.stock}
                           </td>
                           <td className="p-4 border-l border-slate-100">
                             {hasMatch ? (
                               <div className="max-w-[200px]">
-                                <div className="font-semibold text-xs text-emerald-700 flex items-center gap-1">
+                                <div className="font-bold text-xs text-emerald-700 flex items-center gap-1">
                                   <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
-                                  {matchingSku}
+                                  <span className="truncate" title={matchingSku || ''}>{matchingSku}</span>
                                 </div>
-                                <div className="text-[10px] text-slate-500 truncate" title={item.matchedProduct?.name}>
+                                <div className="text-[10px] text-slate-500 line-clamp-1 whitespace-normal" title={item.matchedProduct?.name}>
                                   {item.matchedProduct?.name}
                                 </div>
                               </div>
@@ -1420,7 +1483,7 @@ export default function ShopeeTab({
                                     setStockEdits(prev => ({ ...prev, [key]: current - 1 }));
                                   }
                                 }}
-                                className="w-7 h-7 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg font-bold text-slate-700 flex items-center justify-center text-xs active:scale-90 transition-all select-none"
+                                className="w-7 h-7 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg font-bold text-slate-700 flex items-center justify-center text-xs active:scale-90 transition-all select-none cursor-pointer"
                               >
                                 -
                               </button>
@@ -1446,7 +1509,7 @@ export default function ShopeeTab({
                                   const current = getItemStock(item);
                                   setStockEdits(prev => ({ ...prev, [key]: current + 1 }));
                                 }}
-                                className="w-7 h-7 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg font-bold text-slate-700 flex items-center justify-center text-xs active:scale-90 transition-all select-none"
+                                className="w-7 h-7 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg font-bold text-slate-700 flex items-center justify-center text-xs active:scale-90 transition-all select-none cursor-pointer"
                               >
                                 +
                               </button>
@@ -1484,7 +1547,7 @@ export default function ShopeeTab({
                                         return next;
                                       });
                                     }}
-                                    className="text-[10px] font-semibold text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-2 py-1 rounded transition-colors"
+                                    className="text-[10px] font-semibold text-slate-400 hover:text-rose-600 hover:bg-rose-50 px-2 py-1 rounded transition-colors cursor-pointer"
                                   >
                                     Batal
                                   </button>
