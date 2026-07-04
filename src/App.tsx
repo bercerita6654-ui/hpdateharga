@@ -198,7 +198,7 @@ export default function App() {
 
   const [serverDrafts, setServerDrafts] = useState<Record<string, any>>({});
   const [expandedSubmissionId, setExpandedSubmissionId] = useState<string | number | null>(null);
-  const [activeView, setActiveView] = useState<'calculator' | 'competitor' | 'inbox' | 'history' | 'shopee'>('calculator');
+  const [activeView, setActiveView] = useState<'calculator' | 'competitor' | 'inbox' | 'history' | 'shopee' | 'gomall_shopee'>('calculator');
   const [displayLimit, setDisplayLimit] = useState(100);
 
   const [fees, setFees] = useState<Fees>(() => {
@@ -1715,6 +1715,16 @@ export default function App() {
             >
               Shopee Balist
             </button>
+            <button
+              onClick={() => setActiveView('gomall_shopee')}
+              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 ${
+                activeView === 'gomall_shopee'
+                  ? 'bg-white border border-slate-200/50 shadow-sm text-indigo-600 font-semibold'
+                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100/50'
+              }`}
+            >
+              Gomall Shopee
+            </button>
           </div>
 
           <div className="flex items-center gap-2 border-l border-slate-200 pl-4 hidden md:flex">
@@ -2505,6 +2515,23 @@ export default function App() {
             rounding={rounding}
             useSmartMargin={useSmartMargin}
             getSmartMarginForSku={getSmartMarginForSku}
+          />
+        )}
+
+        {activeView === 'gomall_shopee' && (
+          <ShopeeTab
+            productList={productList}
+            fees={fees}
+            setSelectedSku={setSelectedSku}
+            setProduct={setProduct}
+            setActiveView={setActiveView}
+            rounding={rounding}
+            useSmartMargin={useSmartMargin}
+            getSmartMarginForSku={getSmartMarginForSku}
+            shopName="GomallShopee"
+            sheetUrl="https://docs.google.com/spreadsheets/d/e/2PACX-1vQUJWBw2EXirlxov14JNpI1h3ulExBcMQxQ5orpGZmpW7cMqUqMkU9E6OxJ4CBLd4ZvAW8tBmhmEEF6/pub?gid=1555986622&single=true&output=csv"
+            cacheKeyPrefix="gomall_shopee"
+            fileNamePrefix="GomallShopee_Update_Harga"
           />
         )}
 

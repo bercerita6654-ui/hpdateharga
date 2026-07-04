@@ -44,10 +44,14 @@ interface ShopeeTabProps {
   fees: Fees;
   setSelectedSku: (sku: string) => void;
   setProduct: React.Dispatch<React.SetStateAction<{ hpp: number; basePrice: number }>>;
-  setActiveView: (view: 'calculator' | 'competitor' | 'inbox' | 'history' | 'shopee') => void;
+  setActiveView: (view: any) => void;
   rounding?: string;
   useSmartMargin?: boolean;
   getSmartMarginForSku?: (sku: string) => number;
+  shopName?: string;
+  sheetUrl?: string;
+  cacheKeyPrefix?: string;
+  fileNamePrefix?: string;
 }
 
 export default function ShopeeTab({
@@ -58,12 +62,16 @@ export default function ShopeeTab({
   setActiveView,
   rounding = 'none',
   useSmartMargin = false,
-  getSmartMarginForSku
+  getSmartMarginForSku,
+  shopName = 'ShopeeBalist',
+  sheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQUJWBw2EXirlxov14JNpI1h3ulExBcMQxQ5orpGZmpW7cMqUqMkU9E6OxJ4CBLd4ZvAW8tBmhmEEF6/pub?gid=1378584398&single=true&output=csv',
+  cacheKeyPrefix = 'shopee_balist',
+  fileNamePrefix = 'Shopee_Update_Harga'
 }: ShopeeTabProps) {
   const [shopeeItems, setShopeeItems] = useState<ShopeeProduct[]>([]);
   const [shopeeHeaderRows, setShopeeHeaderRows] = useState<string[][]>(() => {
     try {
-      const saved = localStorage.getItem('shopee_header_rows_cache');
+      const saved = localStorage.getItem(`${cacheKeyPrefix}_header_rows_cache`);
       if (saved) return JSON.parse(saved);
     } catch (e) {}
     return [
@@ -242,7 +250,7 @@ export default function ShopeeTab({
             : 'Partai'
         }`
       : '_Original';
-    XLSX.writeFile(wb, `Shopee_Update_Harga_${dd}-${mm}-${yyyy}${suffix}.xlsx`);
+    XLSX.writeFile(wb, `${fileNamePrefix}_${dd}-${mm}-${yyyy}${suffix}.xlsx`);
   };
 
   // Parse Shopee Balist CSV
@@ -294,7 +302,7 @@ export default function ShopeeTab({
       }
 
       const productId = r[0].trim();
-      const productName = r[1] || 'Produk Shopee';
+      const productName = r[1] || `Produk ${shopName}`;
       const variationId = r[2] || '';
       const variationName = r[3] || '';
       const parentSku = r[4] || '';
@@ -324,8 +332,8 @@ export default function ShopeeTab({
     setError(null);
     try {
       if (!force) {
-        const cached = localStorage.getItem('shopee_balist_cache');
-        const cachedHeaders = localStorage.getItem('shopee_header_rows_cache');
+        const cached = localStorage.getItem(`${cacheKeyPrefix}_cache`);
+        const cachedHeaders = localStorage.getItem(`${cacheKeyPrefix}_header_rows_cache`);
         if (cached) {
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) {
@@ -339,9 +347,9 @@ export default function ShopeeTab({
         }
       }
 
-      const res = await fetch(`${SHOPEE_BALIST_URL}&t=${Date.now()}`).catch(() => null);
+      const res = await fetch(`${sheetUrl}&t=${Date.now()}`).catch(() => null);
       if (!res || !res.ok) {
-        throw new Error('Gagal mengunduh file ShopeeBalist. Silakan coba kembali.');
+        throw new Error(`Gagal mengunduh file ${shopName}. Silakan coba kembali.`);
       }
       
       const text = await res.text();
@@ -354,9 +362,9 @@ export default function ShopeeTab({
       setShopeeItems(parsedItems);
       if (headerRows.length > 0) {
         setShopeeHeaderRows(headerRows);
-        localStorage.setItem('shopee_header_rows_cache', JSON.stringify(headerRows));
+        localStorage.setItem(`${cacheKeyPrefix}_header_rows_cache`, JSON.stringify(headerRows));
       }
-      localStorage.setItem('shopee_balist_cache', JSON.stringify(parsedItems));
+      localStorage.setItem(`${cacheKeyPrefix}_cache`, JSON.stringify(parsedItems));
     } catch (err: any) {
       setError(err.message || 'Terjadi kesalahan saat memproses data.');
     } finally {
@@ -366,7 +374,7 @@ export default function ShopeeTab({
 
   useEffect(() => {
     fetchShopeeBalist();
-  }, []);
+  }, [sheetUrl, cacheKeyPrefix]);
 
   // Map system products for ultra-fast lookup by SKU (case insensitive)
   const systemProductMap = useMemo(() => {
@@ -532,10 +540,10 @@ export default function ShopeeTab({
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-sm">
         <div>
           <h2 className="text-lg font-bold text-slate-800 flex items-center">
-            <ShoppingBag className="w-5 h-5 mr-2 text-indigo-600" /> Analisa Harga ShopeeBalist
+            <ShoppingBag className="w-5 h-5 mr-2 text-indigo-600" /> Analisa Harga {shopName}
           </h2>
           <p className="text-xs text-slate-500 mt-1">
-            Bandingkan harga jual aktif di Shopee dengan HPP dan Harga Eceran sistem menggunakan sinkronisasi Google Sheet.
+            Bandingkan harga jual aktif di {shopName} dengan HPP dan Harga Eceran sistem menggunakan sinkronisasi Google Sheet.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -593,10 +601,10 @@ export default function ShopeeTab({
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
             <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-              <Download className="w-4 h-4 text-emerald-600" /> Ekspor Harga ShopeeBalist ke XLSX
+              <Download className="w-4 h-4 text-emerald-600" /> Ekspor Harga {shopName} ke XLSX
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Unduh template massal update harga Shopee untuk diunggah langsung ke Seller Centre Shopee.
+              Unduh template massal update harga {shopName} untuk diunggah langsung ke Seller Centre Shopee.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-3">
@@ -688,7 +696,7 @@ export default function ShopeeTab({
               <li>Mencakup Biaya Nominal (Rp): Marketplace & Jubelio ({formatIDR((Number(fees?.marketplaceProcessingFee) || 0) + (Number(fees?.jubelioProcessingFee) || 0))}) serta Packing ({formatIDR(Number(fees?.packingFee) || 0)}).</li>
               <li>Metode Pembulatan mengikuti pengaturan aktif: <span className="font-bold font-mono text-emerald-900">{rounding === 'none' ? 'Sesuai Rumus' : rounding === '100' ? 'Bulat 100' : rounding === '500' ? 'Bulat 500' : 'Bulat 1000'}</span>.</li>
               <li>Menggunakan <span className="font-bold">Reverse Fee Calculation</span> yang sangat presisi (menjamin laba bersih setelah potongan biaya marketplace sesuai target net payout).</li>
-              <li>Produk Shopee yang tidak memiliki kecocokan di database sistem akan tetap menggunakan harga asli Shopee agar tidak merusak data.</li>
+              <li>Produk {shopName} yang tidak memiliki kecocokan di database sistem akan tetap menggunakan harga asli {shopName} agar tidak merusak data.</li>
               <li>Mengekspor sesuai dengan filter dan pencarian aktif di tabel di bawah ({filteredItems.length} produk).</li>
             </ul>
           </div>
@@ -796,10 +804,10 @@ export default function ShopeeTab({
           <table className="w-full text-left whitespace-nowrap border-collapse">
             <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500">
               <tr>
-                <th className="p-4 min-w-[280px]">Produk Shopee</th>
+                <th className="p-4 min-w-[280px]">Produk {shopName}</th>
                 <th className="p-4">SKU Induk (Col 5)</th>
                 <th className="p-4">SKU Variasi (Col 6)</th>
-                <th className="p-4 text-right bg-indigo-50/30">Harga Shopee</th>
+                <th className="p-4 text-right bg-indigo-50/30">Harga {shopName}</th>
                 <th className="p-4 border-l border-slate-200">Kecocokan Sistem</th>
                 <th className="p-4 text-right">HPP Sistem</th>
                 <th className="p-4 text-right">Eceran Sistem</th>
@@ -813,14 +821,14 @@ export default function ShopeeTab({
                   <td colSpan={9} className="p-12 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <RefreshCw className="w-6 h-6 animate-spin text-indigo-600" />
-                      <span className="text-xs font-semibold">Mengunduh & menganalisa data ShopeeBalist...</span>
+                      <span className="text-xs font-semibold">Mengunduh & menganalisa data {shopName}...</span>
                     </div>
                   </td>
                 </tr>
               ) : filteredItems.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="p-12 text-center text-slate-400 text-sm font-semibold">
-                    Tidak ditemukan data produk Shopee yang cocok dengan kriteria filter.
+                    Tidak ditemukan data produk {shopName} yang cocok dengan kriteria filter.
                   </td>
                 </tr>
               ) : (
@@ -967,10 +975,10 @@ export default function ShopeeTab({
       <div className="bg-indigo-900/5 p-5 rounded-2xl border border-indigo-100 shadow-sm flex items-start gap-4">
         <Info className="w-5 h-5 text-indigo-600 flex-shrink-0 mt-0.5" />
         <div className="text-xs text-slate-600 leading-relaxed">
-          <span className="font-bold text-indigo-950 block mb-1">Tips Analisa ShopeeBalist:</span>
-          1. Sistem mencocokkan produk Shopee dengan sistem internal berdasarkan SKU Induk (kolom 5) terlebih dahulu. Jika tidak ditemukan kecocokan, sistem akan mencoba mencocokkan berdasarkan SKU Variasi (kolom 6).
+          <span className="font-bold text-indigo-950 block mb-1">Tips Analisa {shopName}:</span>
+          1. Sistem mencocokkan produk {shopName} dengan sistem internal berdasarkan SKU Induk (kolom 5) terlebih dahulu. Jika tidak ditemukan kecocokan, sistem akan mencoba mencocokkan berdasarkan SKU Variasi (kolom 6).
           <br />
-          2. <span className="font-bold text-indigo-950">Analisa Selisih Baru</span> menghitung <span className="font-bold text-emerald-700">Profit Bersih</span> setelah harga tayang Shopee dikurangi rincian detail biaya marketplace (Admin, Layanan Xtra, Asuransi, Komisi AMS, Biaya Proses MP & Jubelio, serta biaya Packing) dan biaya Promosi Campaign aktif di kalkulator.
+          2. <span className="font-bold text-indigo-950">Analisa Selisih Baru</span> menghitung <span className="font-bold text-emerald-700">Profit Bersih</span> setelah harga tayang {shopName} dikurangi rincian detail biaya marketplace (Admin, Layanan Xtra, Asuransi, Komisi AMS, Biaya Proses MP & Jubelio, serta biaya Packing) dan biaya Promosi Campaign aktif di kalkulator.
           <br />
           3. Indikator <span className="font-bold text-rose-700 bg-rose-50 px-1 py-0.5 rounded">⚠️ RUGI BERSIH</span> muncul jika pendapatan bersih setelah potongan biaya lebih kecil daripada HPP produk Anda.
           <br />
