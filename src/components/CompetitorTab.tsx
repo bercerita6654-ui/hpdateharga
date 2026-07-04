@@ -39,6 +39,10 @@ interface CompetitorTabProps {
   searchTerm: string;
   setSearchTerm: (val: string) => void;
   filteredProducts: Product[];
+  categories: string[];
+  skuCategoryMap: Record<string, string>;
+  selectedCategoryFilter: string;
+  setSelectedCategoryFilter: (val: string) => void;
 }
 
 export default function CompetitorTab({
@@ -63,7 +67,11 @@ export default function CompetitorTab({
   setShowProductList,
   searchTerm,
   setSearchTerm,
-  filteredProducts
+  filteredProducts,
+  categories,
+  skuCategoryMap,
+  selectedCategoryFilter,
+  setSelectedCategoryFilter
 }: CompetitorTabProps) {
   const [displayLimit, setDisplayLimit] = useState(100);
 
@@ -154,6 +162,31 @@ export default function CompetitorTab({
             {showProductList && (
               <div className="absolute z-50 top-full left-0 right-0 md:w-[150%] mt-2 bg-white border border-slate-200/80 rounded-2xl shadow-xl max-h-[400px] overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
                 <div className="p-4 sticky top-0 bg-slate-50/90 backdrop-blur-sm border-b border-slate-100 z-10">
+                  {/* Filter Kategori */}
+                  <div className="mb-3">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Saring Berdasarkan Kategori
+                    </label>
+                    <select
+                      value={selectedCategoryFilter}
+                      onChange={e => {
+                        setSelectedCategoryFilter(e.target.value);
+                        setDisplayLimit(100);
+                      }}
+                      className="w-full p-2 border border-slate-200 rounded-xl text-xs bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none shadow-sm transition-all text-slate-700 font-semibold cursor-pointer"
+                    >
+                      <option value="">Semua Kategori ({productList.length})</option>
+                      {categories.map((cat, i) => {
+                        const count = productList.filter(p => skuCategoryMap[p.sku] === cat).length;
+                        return (
+                          <option key={i} value={cat}>
+                            {cat} ({count})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
                   <div className="relative">
                     <Search className="w-4 h-4 absolute left-3 top-3.5 text-slate-400" />
                     <input

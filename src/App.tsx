@@ -172,6 +172,7 @@ export default function App() {
   const [categories, setCategories] = useState<string[]>([]);
   const [skuCategoryMap, setSkuCategoryMap] = useState<Record<string, string>>({});
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('');
 
   const [showSettings, setShowSettings] = useState(false);
   const [isSavingFees, setIsSavingFees] = useState(false);
@@ -491,6 +492,9 @@ export default function App() {
   const canSeeHPP = isServer;
 
   const filteredProducts = productList.filter(p => {
+    const matchesCategory = !selectedCategoryFilter || skuCategoryMap[p.sku] === selectedCategoryFilter;
+    if (!matchesCategory) return false;
+
     const term = searchTerm.toLowerCase().trim();
     if (!term) return true;
     return String(p.name).toLowerCase().includes(term) || String(p.sku).toLowerCase().includes(term);
@@ -507,6 +511,9 @@ export default function App() {
     }[] = [];
     
     for (const p of productList) {
+      if (selectedCategoryFilter && skuCategoryMap[p.sku] !== selectedCategoryFilter) {
+        continue;
+      }
       // Name similarity
       const nameSim = calculateStringSimilarity(p.name, term);
       // SKU similarity
@@ -1805,6 +1812,31 @@ export default function App() {
                   {showProductList && (
                     <div className="absolute w-full bg-white border border-slate-200/80 rounded-2xl shadow-xl max-h-[420px] overflow-hidden mt-2 flex flex-col z-50 animate-in fade-in zoom-in-95 duration-200">
                       <div className="p-4 bg-slate-50/80 border-b border-slate-100">
+                        {/* Filter Kategori */}
+                        <div className="mb-3">
+                          <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                            Saring Berdasarkan Kategori
+                          </label>
+                          <select
+                            value={selectedCategoryFilter}
+                            onChange={e => {
+                              setSelectedCategoryFilter(e.target.value);
+                              setDisplayLimit(100);
+                            }}
+                            className="w-full p-2 border border-slate-200 rounded-xl text-xs bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none shadow-sm transition-all text-slate-700 font-semibold cursor-pointer"
+                          >
+                            <option value="">Semua Kategori ({productList.length})</option>
+                            {categories.map((cat, i) => {
+                              const count = productList.filter(p => skuCategoryMap[p.sku] === cat).length;
+                              return (
+                                <option key={i} value={cat}>
+                                  {cat} ({count})
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+
                         <div className="relative">
                           <Search className="w-4 h-4 absolute left-3 top-3.5 text-slate-400" />                           <input
                             autoFocus
@@ -2502,6 +2534,10 @@ export default function App() {
             searchTerm={searchTerm}
             setSearchTerm={setSearchTerm}
             filteredProducts={filteredProducts}
+            categories={categories}
+            skuCategoryMap={skuCategoryMap}
+            selectedCategoryFilter={selectedCategoryFilter}
+            setSelectedCategoryFilter={setSelectedCategoryFilter}
           />
         )}
 
