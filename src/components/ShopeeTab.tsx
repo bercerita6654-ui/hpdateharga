@@ -21,7 +21,8 @@ import {
   Download,
   FileSpreadsheet,
   Sparkles,
-  Upload
+  Upload,
+  CheckSquare
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Product, Fees } from '../types';
@@ -138,7 +139,7 @@ export default function ShopeeTab({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterType, setFilterType] = useState<'all' | 'matched' | 'unmatched' | 'underHpp' | 'underRetail' | 'netProfit' | 'netLoss'>('all');
+  const [filterType, setFilterType] = useState<string>('all');
   const [only5DigitSku, setOnly5DigitSku] = useState(false);
   const [displayLimit, setDisplayLimit] = useState(50);
 
@@ -179,6 +180,10 @@ export default function ShopeeTab({
   });
   const [selectedCampaignKeys, setSelectedCampaignKeys] = useState<Record<string, boolean>>({});
   const [selectedPriceKeys, setSelectedPriceKeys] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setFilterType('all');
+  }, [shopeeTabMode]);
 
   const getItemStock = (item: ShopeeProduct) => {
     const key = `${item.productId}-${item.variationId}`;
@@ -1464,12 +1469,22 @@ export default function ShopeeTab({
     let netLossDiskonCount = 0;
     let netProfitRekomendasiCount = 0;
     let netLossRekomendasiCount = 0;
+    let maxStockCount = 0;
+    let netProfitDiskonAndMaxStockCount = 0;
 
     analyzedCampaignItems.forEach(item => {
+      if (item.stock >= 50) {
+        maxStockCount++;
+      }
       if (item.matchedProduct) {
         matched++;
         if (item.campaignPrice > 0) {
-          if (item.isNetProfitDiskon) netProfitDiskonCount++;
+          if (item.isNetProfitDiskon) {
+            netProfitDiskonCount++;
+            if (item.stock >= 50) {
+              netProfitDiskonAndMaxStockCount++;
+            }
+          }
           else netLossDiskonCount++;
         }
         if (item.recommendedPrice > 0) {
@@ -1488,7 +1503,9 @@ export default function ShopeeTab({
       netProfitDiskonCount,
       netLossDiskonCount,
       netProfitRekomendasiCount,
-      netLossRekomendasiCount
+      netLossRekomendasiCount,
+      maxStockCount,
+      netProfitDiskonAndMaxStockCount
     };
   }, [analyzedCampaignItems]);
 
@@ -1603,7 +1620,7 @@ export default function ShopeeTab({
   // Filtered Campaign Items Memo
   const filteredCampaignItems = useMemo(() => {
     const query = searchTerm.toLowerCase().trim();
-    return analyzedCampaignItems.filter(item => {
+    let items = analyzedCampaignItems.filter(item => {
       const matchesSearch = 
         item.productName.toLowerCase().includes(query) ||
         item.variationName.toLowerCase().includes(query) ||
@@ -1617,9 +1634,16 @@ export default function ShopeeTab({
       if (filterType === 'campaignNetProfit') return !!item.matchedProduct && item.isNetProfitDiskon;
       if (filterType === 'campaignNetLoss') return !!item.matchedProduct && !item.isNetProfitDiskon;
       if (filterType === 'campaignRecLoss') return !!item.matchedProduct && !item.isNetProfitRekomendasi;
+      if (filterType === 'campaignMaxStock') return item.stock >= 50;
 
       return true;
     });
+
+    if (filterType === 'campaignMaxStock') {
+      items = [...items].sort((a, b) => b.stock - a.stock);
+    }
+
+    return items;
   }, [analyzedCampaignItems, searchTerm, filterType]);
 
   const getSelectedCampaignCount = () => {
@@ -2354,7 +2378,7 @@ export default function ShopeeTab({
                 </span>
               </div>
               
-              <div className="flex items-center gap-1.5 self-start sm:self-auto">
+              <div className="flex items-center gap-1.5 flex-wrap self-start sm:self-auto">
                 <button
                   type="button"
                   onClick={() => {
@@ -2367,6 +2391,22 @@ export default function ShopeeTab({
                   className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 px-2 py-1.5 rounded-lg font-bold text-[10px] uppercase shadow-sm active:scale-95 transition-all"
                 >
                   Pilih Semua
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = { ...selectedCampaignKeys };
+                    analyzedCampaignItems.forEach(item => {
+                      if (item.stock >= 50) {
+                        next[`${item.productId}-${item.variationId}`] = true;
+                      }
+                    });
+                    setSelectedCampaignKeys(next);
+                  }}
+                  className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 px-2 py-1.5 rounded-lg font-bold text-[10px] uppercase shadow-sm active:scale-95 transition-all flex items-center gap-1"
+                >
+                  <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
+                  Pilih Stok &gt;= 50
                 </button>
                 <button
                   type="button"
@@ -2506,6 +2546,16 @@ export default function ShopeeTab({
                 >
                   Rekomendasi Rugi ({campaignStats.netLossRekomendasiCount})
                 </button>
+                <button
+                  onClick={() => setFilterType('campaignMaxStock')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'campaignMaxStock'
+                      ? 'bg-blue-600 text-white shadow-sm font-bold'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-700'
+                  }`}
+                >
+                  Stok Terbanyak (Min. 50 Qty) ({campaignStats.maxStockCount})
+                </button>
               </>
             ) : (
               <>
@@ -2573,6 +2623,32 @@ export default function ShopeeTab({
             )}
           </div>
         </div>
+
+        {shopeeTabMode === 'campaign' && filterType === 'campaignNetProfit' && (
+          <div className="bg-emerald-50 border-b border-emerald-100 p-3 px-4 flex flex-col sm:flex-row items-center justify-between gap-3 animate-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-2">
+              <CheckSquare className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+              <p className="text-xs text-emerald-800 font-medium">
+                Terdapat <strong className="font-extrabold">{campaignStats.netProfitDiskonAndMaxStockCount}</strong> produk diskon untung dengan <strong className="font-extrabold">stok &gt;= 50 qty</strong> dari total {campaignStats.netProfitDiskonCount} diskon untung.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const next = { ...selectedCampaignKeys };
+                analyzedCampaignItems.forEach(item => {
+                  if (item.matchedProduct && item.isNetProfitDiskon && item.stock >= 50) {
+                    next[`${item.productId}-${item.variationId}`] = true;
+                  }
+                });
+                setSelectedCampaignKeys(next);
+              }}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl shadow-sm hover:shadow-emerald-500/10 active:scale-95 transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+            >
+              <CheckSquare className="w-4 h-4" /> Centang Stok &gt;= 50 (Untung)
+            </button>
+          </div>
+        )}
 
         {/* COMPARISON TABLE */}
         <div className="overflow-x-auto custom-scrollbar">

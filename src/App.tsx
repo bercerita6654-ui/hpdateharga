@@ -42,6 +42,7 @@ import CartTable from './components/CartTable';
 import CompetitorTab from './components/CompetitorTab';
 import ShopeeTab from './components/ShopeeTab';
 import CartProfitMarginChart from './components/CartProfitMarginChart';
+import CartStockDistributionChart from './components/CartStockDistributionChart';
 
 const PRODUCT_DB_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCxz1GPm7QU9IS1yBiSjvIdNTLUsvvplOCyT_R3XH4O-LuVbHoY_bXn1LTH5lpnlolJ29BhUgEdnFm/pub?gid=1428805476&single=true&output=csv';
 const CATEGORY_DB_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRrRDnJctzeF3FC_-81KzNHZIX3epxC6WwdmIbhXBGl1rlRKvSUfsvsZCZtuiPyULe5b2wJXOIYK8hs/pub?gid=481142784&single=true&output=csv';
@@ -772,25 +773,44 @@ export default function App() {
           const linesHpp = textHpp.split('\n');
           if (linesHpp.length > 1) {
             const hppMap: Record<string, number> = {};
+            const stockMap: Record<string, number> = {};
             const headerHpp = parseLineLocal(linesHpp[0]).map(v => v.toLowerCase().trim());
 
             let hppIdx = headerHpp.findIndex(h => h === 'hpp akhir' || h.includes('hpp akhir'));
             if (hppIdx === -1) hppIdx = 7;
+            
+            let qtyIdx = headerHpp.findIndex(h => h === 'stok' || h.includes('stok') || h.includes('qty') || h.includes('stock') || h.includes('quantity'));
+            if (qtyIdx === -1) qtyIdx = 12;
+            
             const skuIdx = 0;
+
+            const parseStockValue = (valStr: string): number => {
+              if (!valStr) return 0;
+              let cleaned = valStr.trim();
+              if (cleaned.startsWith('-')) return 0;
+              const num = parseInt(cleaned.replace(/[^0-9-]/g, '')) || 0;
+              return num < 0 ? 0 : num;
+            };
 
             linesHpp.slice(1).forEach(l => {
               if (!l.trim()) return;
               const r = parseLineLocal(l);
               const skuStr = r[skuIdx] ? r[skuIdx].trim() : '';
               const hppVal = numHelper(r[hppIdx]);
+              const qtyVal = r.length > qtyIdx ? parseStockValue(r[qtyIdx]) : 0;
               if (skuStr) {
                 hppMap[skuStr] = hppVal;
+                stockMap[skuStr] = qtyVal;
               }
             });
-            products = products.map(p => ({
-              ...p,
-              hpp: hppMap[p.sku.trim()] || p.hpp || 0
-            }));
+            products = products.map(p => {
+              const cleanedSku = p.sku.trim();
+              return {
+                ...p,
+                hpp: hppMap[cleanedSku] || p.hpp || 0,
+                stock: stockMap[cleanedSku] !== undefined ? stockMap[cleanedSku] : 0
+              };
+            });
           }
         }
       } catch (errHpp) {
@@ -930,7 +950,8 @@ export default function App() {
         priceMin6: prices.priceMin6,
         priceMin12: prices.priceMin12,
         priceCustom: prices.priceCustom,
-        customQtyValue: finalCustomQty
+        customQtyValue: finalCustomQty,
+        stock: selectedProductData?.stock !== undefined ? selectedProductData.stock : 0
       }
     ]);
   };
@@ -970,7 +991,8 @@ export default function App() {
           priceMin6: prices.priceMin6,
           priceMin12: prices.priceMin12,
           priceCustom: prices.priceCustom,
-          customQtyValue: finalCustomQty
+          customQtyValue: finalCustomQty,
+          stock: prod.stock !== undefined ? prod.stock : 0
         });
       }
     });
@@ -2564,12 +2586,17 @@ export default function App() {
                 fees={fees}
               />
 
-              {/* D3 VISUALIZATION FOR CART PROFIT MARGINS */}
-              <CartProfitMarginChart
-                cart={cart}
-                fees={fees}
-                canSeeHPP={canSeeHPP}
-              />
+              {/* D3 VISUALIZATION FOR CART PROFIT MARGINS & STOCK DISTRIBUTION */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <CartProfitMarginChart
+                  cart={cart}
+                  fees={fees}
+                  canSeeHPP={canSeeHPP}
+                />
+                <CartStockDistributionChart
+                  cart={cart}
+                />
+              </div>
             </div>
           </div>
         )}

@@ -11,6 +11,7 @@ export interface Product {
   eceran: number;
   grosir: number;
   partai: number;
+  stock?: number;
 }
 
 export interface CartItem {
@@ -32,6 +33,7 @@ export interface CartItem {
   priceMin12: number;
   priceCustom: number | null;
   customQtyValue: number | null;
+  stock?: number;
 }
 
 export interface CompetitorCartItem {
