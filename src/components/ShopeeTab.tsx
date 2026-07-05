@@ -20,7 +20,8 @@ import {
   Info,
   Download,
   FileSpreadsheet,
-  Sparkles
+  Sparkles,
+  Upload
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Product, Fees } from '../types';
@@ -38,6 +39,25 @@ interface ShopeeProduct {
   price: number;
   stock: number;
   originalRow?: string[];
+}
+
+interface ShopeeCampaignItem {
+  productName: string;
+  productId: string;
+  variationName: string;
+  variationId: string;
+  categoryL1: string;
+  categoryL2: string;
+  categoryL3: string;
+  sales: number;
+  originalPrice: number;
+  currentPrice: number;
+  campaignPrice: number;
+  recommendedPrice: number;
+  stock: number;
+  promoStock: number;
+  purchaseLimit: number;
+  originalRow: any[];
 }
 
 interface ShopeeTabProps {
@@ -109,8 +129,19 @@ export default function ShopeeTab({
   const [exportMarginVal, setExportMarginVal] = useState<number>(10);
   const [exportBaseType, setExportBaseType] = useState<'hpp' | 'eceran' | 'grosir' | 'partai'>('hpp');
 
-  const [shopeeTabMode, setShopeeTabMode] = useState<'price' | 'stock'>('price');
+  const [shopeeTabMode, setShopeeTabMode] = useState<'price' | 'stock' | 'campaign'>('price');
   const [stockEdits, setStockEdits] = useState<Record<string, number>>({});
+
+  // Campaign simulation states
+  const [campaignItems, setCampaignItems] = useState<ShopeeCampaignItem[]>([]);
+  const [originalCampaignRows, setOriginalCampaignRows] = useState<any[][]>([]);
+  const [campaignFileName, setCampaignFileName] = useState<string | null>(null);
+  const [campaignError, setCampaignError] = useState<string | null>(null);
+  const [idxCampaignPriceCol, setIdxCampaignPriceCol] = useState<number>(-1);
+  const [idxRecommendedPriceCol, setIdxRecommendedPriceCol] = useState<number>(-1);
+  const [campaignHeaderRowIdx, setCampaignHeaderRowIdx] = useState<number>(-1);
+  const [campaignDataStartRowIdx, setCampaignDataStartRowIdx] = useState<number>(-1);
+  const [campaignFixMargin, setCampaignFixMargin] = useState<number>(2); // Default target margin to cover tiny variations
   const [stockListMap, setStockListMap] = useState<Record<string, number>>({});
   const [isStockLoading, setIsStockLoading] = useState(false);
   const [stockError, setStockError] = useState<string | null>(null);
@@ -666,6 +697,258 @@ export default function ShopeeTab({
     }
   };
 
+  const handleUploadCampaignFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setCampaignFileName(file.name);
+    setCampaignError(null);
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = evt.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        
+        const rows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1 });
+        if (rows.length < 2) {
+          throw new Error('File excel kosong atau tidak valid.');
+        }
+
+        setOriginalCampaignRows(rows);
+
+        // Detect the header row (contains "kode produk" or similar)
+        let headerRowIndex = -1;
+        for (let i = 0; i < Math.min(10, rows.length); i++) {
+          const row = rows[i] as any[];
+          if (row && row.some(cell => String(cell || '').toLowerCase().includes('kode produk'))) {
+            headerRowIndex = i;
+            break;
+          }
+        }
+
+        if (headerRowIndex === -1) {
+          headerRowIndex = rows.length > 2 ? 2 : 0;
+        }
+
+        setCampaignHeaderRowIdx(headerRowIndex);
+
+        const headers = (rows[headerRowIndex] as any[]).map(h => String(h || '').trim());
+        
+        const getColIdx = (names: string[]) => {
+          return headers.findIndex(h => 
+            names.some(name => h.toLowerCase().includes(name.toLowerCase()))
+          );
+        };
+
+        const idxProductName = getColIdx(['nama produk']);
+        const idxProductId = getColIdx(['kode produk', 'product id']);
+        const idxVariationName = getColIdx(['nama variasi']);
+        const idxVariationId = getColIdx(['kode variasi', 'variation id']);
+        const idxCategoryL1 = getColIdx(['kategori shopee l1']);
+        const idxCategoryL2 = getColIdx(['kategori shopee l2']);
+        const idxCategoryL3 = getColIdx(['kategori shopee l3']);
+        const idxSales = getColIdx(['penjualan']);
+        const idxOriginalPrice = getColIdx(['harga awal']);
+        const idxCurrentPrice = getColIdx(['harga saat ini']);
+        const idxCampaignPrice = getColIdx(['harga diskon']);
+        const idxRecommendedPrice = getColIdx(['rekomendasi harga diskon']);
+        const idxStock = getColIdx(['stok']);
+        const idxPromoStock = getColIdx(['stok promo']);
+        const idxPurchaseLimit = getColIdx(['batas pembelian']);
+
+        setIdxCampaignPriceCol(idxCampaignPrice);
+        setIdxRecommendedPriceCol(idxRecommendedPrice);
+
+        // Find data starting row (skip "Wajib", "Opsional", helper instructions)
+        let dataStartRowIdx = headerRowIndex + 1;
+        while (dataStartRowIdx < rows.length) {
+          const row = rows[dataStartRowIdx] as any[];
+          if (row && row.length > 0) {
+            const firstCell = String(row[0] || '').trim();
+            const secondCell = String(row[1] || '').trim();
+            if (
+              firstCell.toLowerCase().includes('opsional') || 
+              firstCell.toLowerCase().includes('wajib') || 
+              firstCell.toLowerCase().includes('nama produk tersedia') || 
+              secondCell.toLowerCase().includes('mohon masukkan') ||
+              secondCell.toLowerCase().includes('wajib')
+            ) {
+              dataStartRowIdx++;
+              continue;
+            }
+            break;
+          }
+          dataStartRowIdx++;
+        }
+
+        setCampaignDataStartRowIdx(dataStartRowIdx);
+
+        const parsedCampaignItems: ShopeeCampaignItem[] = [];
+        const cleanNum = (val: any): number => {
+          if (val === undefined || val === null) return 0;
+          const s = String(val).replace(/[^0-9.-]/g, '');
+          return Number(s) || 0;
+        };
+
+        for (let i = dataStartRowIdx; i < rows.length; i++) {
+          const row = rows[i] as any[];
+          if (!row || row.length === 0) continue;
+
+          const productId = idxProductId !== -1 ? String(row[idxProductId] || '').trim() : '';
+          const variationId = idxVariationId !== -1 ? String(row[idxVariationId] || '').trim() : '';
+
+          if (!productId && !variationId) continue;
+
+          parsedCampaignItems.push({
+            productName: idxProductName !== -1 ? String(row[idxProductName] || '').trim() : '',
+            productId,
+            variationName: idxVariationName !== -1 ? String(row[idxVariationName] || '').trim() : '',
+            variationId,
+            categoryL1: idxCategoryL1 !== -1 ? String(row[idxCategoryL1] || '').trim() : '',
+            categoryL2: idxCategoryL2 !== -1 ? String(row[idxCategoryL2] || '').trim() : '',
+            categoryL3: idxCategoryL3 !== -1 ? String(row[idxCategoryL3] || '').trim() : '',
+            sales: idxSales !== -1 ? cleanNum(row[idxSales]) : 0,
+            originalPrice: idxOriginalPrice !== -1 ? cleanNum(row[idxOriginalPrice]) : 0,
+            currentPrice: idxCurrentPrice !== -1 ? cleanNum(row[idxCurrentPrice]) : 0,
+            campaignPrice: idxCampaignPrice !== -1 ? cleanNum(row[idxCampaignPrice]) : 0,
+            recommendedPrice: idxRecommendedPrice !== -1 ? cleanNum(row[idxRecommendedPrice]) : 0,
+            stock: idxStock !== -1 ? cleanNum(row[idxStock]) : 0,
+            promoStock: idxPromoStock !== -1 ? cleanNum(row[idxPromoStock]) : 0,
+            purchaseLimit: idxPurchaseLimit !== -1 ? cleanNum(row[idxPurchaseLimit]) : 0,
+            originalRow: row
+          });
+        }
+
+        if (parsedCampaignItems.length === 0) {
+          throw new Error('Tidak ada data produk kampanye yang valid. Silakan periksa format kolom excel.');
+        }
+
+        setCampaignItems(parsedCampaignItems);
+      } catch (err: any) {
+        setCampaignError(err.message || 'Gagal menguraikan file xlsx campaign.');
+        setCampaignItems([]);
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  const handleAutoFixCampaignPrices = () => {
+    if (campaignItems.length === 0) return;
+
+    const totalPercent =
+      (Number(fees?.adminFee) || 0) +
+      (Number(fees?.layananXtra) || 0) +
+      (Number(fees?.insurance) || 0) +
+      (Number(fees?.komisiAMS) || 0) +
+      (Number(fees?.campaignFee) || 0);
+    const decimal = totalPercent / 100;
+    const fixed =
+      (Number(fees?.marketplaceProcessingFee) || 0) +
+      (Number(fees?.jubelioProcessingFee) || 0) +
+      (Number(fees?.packingFee) || 0);
+
+    const updated = campaignItems.map(item => {
+      const prodId = item.productId.trim();
+      const varId = item.variationId.trim();
+
+      let foundShopeeItem = shopeeItems.find(sItem => {
+        const sProdId = sItem.productId.trim();
+        const sVarId = sItem.variationId.trim();
+        if (varId && sVarId) return sProdId === prodId && sVarId === varId;
+        return sProdId === prodId;
+      });
+
+      let matchedProduct: Product | undefined;
+      if (foundShopeeItem) {
+        const vSku = foundShopeeItem.variationSku.trim().toLowerCase();
+        const pSku = foundShopeeItem.parentSku.trim().toLowerCase();
+        matchedProduct = pSku ? systemProductMap.get(pSku) : undefined;
+        if (!matchedProduct && vSku) matchedProduct = systemProductMap.get(vSku);
+      }
+      if (!matchedProduct) {
+        matchedProduct = systemProductMap.get(prodId.toLowerCase());
+        if (!matchedProduct && varId) matchedProduct = systemProductMap.get(varId.toLowerCase());
+      }
+
+      if (!matchedProduct) return item;
+
+      const systemHpp = matchedProduct.hpp || 0;
+
+      const baseForFix = item.campaignPrice > 0 
+        ? item.campaignPrice 
+        : (item.recommendedPrice > 0 ? item.recommendedPrice : item.originalPrice);
+
+      const totalFeesCurrent = baseForFix * decimal + fixed;
+      const netPayoutCurrent = baseForFix - totalFeesCurrent;
+      const netProfitCurrent = netPayoutCurrent - systemHpp;
+
+      if (netProfitCurrent < 0) {
+        let rawPrice = 0;
+        const targetMargin = campaignFixMargin;
+        
+        if (1 - decimal > 0) {
+          rawPrice = (systemHpp * (1 + targetMargin / 100) + fixed) / (1 - decimal);
+        } else {
+          rawPrice = systemHpp * (1 + targetMargin / 100) * (1 + decimal) + fixed;
+        }
+
+        let finalPrice = 0;
+        if (rounding === '100') {
+          finalPrice = Math.ceil(rawPrice / 100) * 100;
+        } else if (rounding === '500') {
+          finalPrice = Math.ceil(rawPrice / 500) * 500;
+        } else if (rounding === '1000') {
+          finalPrice = Math.ceil(rawPrice / 1000) * 1000;
+        } else {
+          finalPrice = Math.ceil(rawPrice);
+        }
+
+        return {
+          ...item,
+          campaignPrice: finalPrice
+        };
+      } else {
+        if (item.campaignPrice === 0 && baseForFix > 0) {
+          return {
+            ...item,
+            campaignPrice: baseForFix
+          };
+        }
+      }
+
+      return item;
+    });
+
+    setCampaignItems(updated);
+  };
+
+  const handleDownloadFixedCampaignXLSX = () => {
+    if (campaignItems.length === 0 || originalCampaignRows.length === 0) return;
+
+    const rowsCopy = originalCampaignRows.map(row => [...row]);
+    
+    campaignItems.forEach((item, k) => {
+      const targetIdx = campaignDataStartRowIdx + k;
+      if (rowsCopy[targetIdx] && idxCampaignPriceCol !== -1) {
+        rowsCopy[targetIdx][idxCampaignPriceCol] = item.campaignPrice;
+      }
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet(rowsCopy);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Campaign_Shopee_Fixed");
+
+    const today = new Date();
+    const dd = String(today.getDate()).padStart(2, '0');
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const yyyy = today.getFullYear();
+
+    XLSX.writeFile(wb, `Campaign_Shopee_Fixed_${dd}-${mm}-${yyyy}.xlsx`);
+  };
+
   useEffect(() => {
     fetchShopeeBalist();
   }, [sheetUrl, cacheKeyPrefix]);
@@ -818,6 +1101,149 @@ export default function ShopeeTab({
     };
   }, [analyzedItems]);
 
+  // Analyzed Campaign Items Memo
+  const analyzedCampaignItems = useMemo(() => {
+    return campaignItems.map(item => {
+      const prodId = item.productId.trim();
+      const varId = item.variationId.trim();
+
+      // Find match in shopeeItems
+      let foundShopeeItem = shopeeItems.find(sItem => {
+        const sProdId = sItem.productId.trim();
+        const sVarId = sItem.variationId.trim();
+        if (varId && sVarId) {
+          return sProdId === prodId && sVarId === varId;
+        }
+        return sProdId === prodId;
+      });
+
+      let matchedProduct: Product | undefined;
+      let matchedSku = '';
+
+      if (foundShopeeItem) {
+        const vSku = foundShopeeItem.variationSku.trim().toLowerCase();
+        const pSku = foundShopeeItem.parentSku.trim().toLowerCase();
+
+        matchedProduct = pSku ? systemProductMap.get(pSku) : undefined;
+        if (!matchedProduct && vSku) {
+          matchedProduct = systemProductMap.get(vSku);
+        }
+        if (matchedProduct) {
+          matchedSku = matchedProduct.sku;
+        }
+      }
+
+      if (!matchedProduct) {
+        matchedProduct = systemProductMap.get(prodId.toLowerCase());
+        if (!matchedProduct && varId) {
+          matchedProduct = systemProductMap.get(varId.toLowerCase());
+        }
+        if (matchedProduct) {
+          matchedSku = matchedProduct.sku;
+        }
+      }
+
+      // Calculations
+      let netPayoutDiskon = 0;
+      let netProfitDiskon = 0;
+      let isNetProfitDiskon = false;
+      let netMarginDiskon = 0;
+      let totalFeesDiskon = 0;
+
+      let netPayoutRekomendasi = 0;
+      let netProfitRekomendasi = 0;
+      let isNetProfitRekomendasi = false;
+      let netMarginRekomendasi = 0;
+      let totalFeesRekomendasi = 0;
+
+      const totalPercent =
+        (Number(fees?.adminFee) || 0) +
+        (Number(fees?.layananXtra) || 0) +
+        (Number(fees?.insurance) || 0) +
+        (Number(fees?.komisiAMS) || 0) +
+        (Number(fees?.campaignFee) || 0);
+      const decimal = totalPercent / 100;
+      const fixed =
+        (Number(fees?.marketplaceProcessingFee) || 0) +
+        (Number(fees?.jubelioProcessingFee) || 0) +
+        (Number(fees?.packingFee) || 0);
+
+      if (matchedProduct) {
+        const systemHpp = matchedProduct.hpp || 0;
+
+        // campaignPrice (Harga Diskon)
+        if (item.campaignPrice > 0) {
+          totalFeesDiskon = item.campaignPrice * decimal + fixed;
+          netPayoutDiskon = item.campaignPrice - totalFeesDiskon;
+          netProfitDiskon = netPayoutDiskon - systemHpp;
+          isNetProfitDiskon = netProfitDiskon >= 0;
+          netMarginDiskon = (netProfitDiskon / item.campaignPrice) * 100;
+        }
+
+        // recommendedPrice (Rekomendasi Harga Diskon)
+        if (item.recommendedPrice > 0) {
+          totalFeesRekomendasi = item.recommendedPrice * decimal + fixed;
+          netPayoutRekomendasi = item.recommendedPrice - totalFeesRekomendasi;
+          netProfitRekomendasi = netPayoutRekomendasi - systemHpp;
+          isNetProfitRekomendasi = netProfitRekomendasi >= 0;
+          netMarginRekomendasi = (netProfitRekomendasi / item.recommendedPrice) * 100;
+        }
+      }
+
+      return {
+        ...item,
+        matchedProduct,
+        matchedSku,
+        netPayoutDiskon,
+        netProfitDiskon,
+        isNetProfitDiskon,
+        netMarginDiskon,
+        totalFeesDiskon,
+        netPayoutRekomendasi,
+        netProfitRekomendasi,
+        isNetProfitRekomendasi,
+        netMarginRekomendasi,
+        totalFeesRekomendasi
+      };
+    });
+  }, [campaignItems, shopeeItems, systemProductMap, fees]);
+
+  // Campaign statistics
+  const campaignStats = useMemo(() => {
+    let matched = 0;
+    let unmatched = 0;
+    let netProfitDiskonCount = 0;
+    let netLossDiskonCount = 0;
+    let netProfitRekomendasiCount = 0;
+    let netLossRekomendasiCount = 0;
+
+    analyzedCampaignItems.forEach(item => {
+      if (item.matchedProduct) {
+        matched++;
+        if (item.campaignPrice > 0) {
+          if (item.isNetProfitDiskon) netProfitDiskonCount++;
+          else netLossDiskonCount++;
+        }
+        if (item.recommendedPrice > 0) {
+          if (item.isNetProfitRekomendasi) netProfitRekomendasiCount++;
+          else netLossRekomendasiCount++;
+        }
+      } else {
+        unmatched++;
+      }
+    });
+
+    return {
+      total: analyzedCampaignItems.length,
+      matched,
+      unmatched,
+      netProfitDiskonCount,
+      netLossDiskonCount,
+      netProfitRekomendasiCount,
+      netLossRekomendasiCount
+    };
+  }, [analyzedCampaignItems]);
+
   // Search and Filter
   const filteredItems = useMemo(() => {
     const query = searchTerm.toLowerCase().trim();
@@ -846,6 +1272,28 @@ export default function ShopeeTab({
       return true;
     });
   }, [analyzedItems, searchTerm, filterType, only5DigitSku]);
+
+  // Filtered Campaign Items Memo
+  const filteredCampaignItems = useMemo(() => {
+    const query = searchTerm.toLowerCase().trim();
+    return analyzedCampaignItems.filter(item => {
+      const matchesSearch = 
+        item.productName.toLowerCase().includes(query) ||
+        item.variationName.toLowerCase().includes(query) ||
+        item.productId.toLowerCase().includes(query) ||
+        item.variationId.toLowerCase().includes(query);
+
+      if (!matchesSearch) return false;
+
+      if (filterType === 'matched') return !!item.matchedProduct;
+      if (filterType === 'unmatched') return !item.matchedProduct;
+      if (filterType === 'campaignNetProfit') return !!item.matchedProduct && item.isNetProfitDiskon;
+      if (filterType === 'campaignNetLoss') return !!item.matchedProduct && !item.isNetProfitDiskon;
+      if (filterType === 'campaignRecLoss') return !!item.matchedProduct && !item.isNetProfitRekomendasi;
+
+      return true;
+    });
+  }, [analyzedCampaignItems, searchTerm, filterType]);
 
   const handleSelectToCalculator = (sku: string, hpp: number, eceran: number) => {
     setSelectedSku(sku);
@@ -878,10 +1326,10 @@ export default function ShopeeTab({
       </div>
 
       {/* SUBTABS MODE SELECTOR */}
-      <div className="flex border border-slate-200/80 p-1 bg-slate-50 rounded-xl gap-1 max-w-md">
+      <div className="flex border border-slate-200/80 p-1 bg-slate-50 rounded-xl gap-1 max-w-lg">
         <button
           onClick={() => setShopeeTabMode('price')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${
             shopeeTabMode === 'price'
               ? 'bg-white text-indigo-600 shadow-sm border border-slate-200/50 font-black'
               : 'text-slate-500 hover:text-slate-800'
@@ -892,7 +1340,7 @@ export default function ShopeeTab({
         </button>
         <button
           onClick={() => setShopeeTabMode('stock')}
-          className={`flex-1 flex items-center justify-center gap-2 py-2 px-4 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${
             shopeeTabMode === 'stock'
               ? 'bg-white text-indigo-600 shadow-sm border border-slate-200/50 font-black'
               : 'text-slate-500 hover:text-slate-800'
@@ -901,10 +1349,21 @@ export default function ShopeeTab({
           <Database className="w-3.5 h-3.5" />
           Atur & Update Stok
         </button>
+        <button
+          onClick={() => setShopeeTabMode('campaign')}
+          className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 text-xs font-bold uppercase tracking-wider rounded-lg transition-all ${
+            shopeeTabMode === 'campaign'
+              ? 'bg-white text-indigo-600 shadow-sm border border-slate-200/50 font-black'
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <FileSpreadsheet className="w-3.5 h-3.5" />
+          Simulasi Campaign
+        </button>
       </div>
 
       {/* ERROR MESSAGE */}
-      {error && (
+      {error && shopeeTabMode !== 'campaign' && (
         <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-xl text-xs flex items-start gap-2.5 shadow-sm">
           <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
           <div>
@@ -914,32 +1373,61 @@ export default function ShopeeTab({
       )}
 
       {/* STATISTICS CARDS */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Produk</span>
-          <span className="text-2xl font-black text-slate-800 font-mono mt-2">{stats.total}</span>
+      {shopeeTabMode === 'campaign' ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 animate-in fade-in duration-200">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Campaign SKU</span>
+            <span className="text-2xl font-black text-slate-800 font-mono mt-2">{campaignStats.total}</span>
+          </div>
+          <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Terhubung Sistem</span>
+            <span className="text-2xl font-black text-indigo-700 font-mono mt-2">{campaignStats.matched}</span>
+          </div>
+          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Baru (Belum Ada)</span>
+            <span className="text-2xl font-black text-slate-700 font-mono mt-2">{campaignStats.unmatched}</span>
+          </div>
+          <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-between col-span-1">
+            <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Input Diskon Untung</span>
+            <span className="text-2xl font-black text-emerald-700 font-mono mt-2">{campaignStats.netProfitDiskonCount}</span>
+          </div>
+          <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-between col-span-1">
+            <span className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Input Diskon Rugi</span>
+            <span className="text-2xl font-black text-rose-700 font-mono mt-2">{campaignStats.netLossDiskonCount}</span>
+          </div>
+          <div className="bg-amber-50/50 p-4 rounded-2xl border border-amber-100 shadow-sm flex flex-col justify-between col-span-1">
+            <span className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Rugi Rekomendasi Shopee</span>
+            <span className="text-2xl font-black text-rose-700 font-mono mt-2">{campaignStats.netLossRekomendasiCount}</span>
+          </div>
         </div>
-        <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Terhubung Sistem</span>
-          <span className="text-2xl font-black text-indigo-700 font-mono mt-2">{stats.matched}</span>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Produk</span>
+            <span className="text-2xl font-black text-slate-800 font-mono mt-2">{stats.total}</span>
+          </div>
+          <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Terhubung Sistem</span>
+            <span className="text-2xl font-black text-indigo-700 font-mono mt-2">{stats.matched}</span>
+          </div>
+          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Baru (Belum Ada)</span>
+            <span className="text-2xl font-black text-slate-700 font-mono mt-2">{stats.unmatched}</span>
+          </div>
+          <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Untung Bersih (Setelah Potongan)</span>
+            <span className="text-2xl font-black text-emerald-700 font-mono mt-2">{stats.netProfitCount}</span>
+          </div>
+          <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Rugi Bersih (Setelah Potongan)</span>
+            <span className="text-2xl font-black text-rose-700 font-mono mt-2">{stats.netLossCount}</span>
+          </div>
+          <div className="bg-amber-50/50 p-4 rounded-2xl border border-amber-100 shadow-sm flex flex-col justify-between">
+            <span className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Di Bawah Eceran</span>
+            <span className="text-2xl font-black text-amber-700 font-mono mt-2">{stats.underRetail}</span>
+          </div>
         </div>
-        <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Baru (Belum Ada)</span>
-          <span className="text-2xl font-black text-slate-700 font-mono mt-2">{stats.unmatched}</span>
-        </div>
-        <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Untung Bersih (Setelah Potongan)</span>
-          <span className="text-2xl font-black text-emerald-700 font-mono mt-2">{stats.netProfitCount}</span>
-        </div>
-        <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Rugi Bersih (Setelah Potongan)</span>
-          <span className="text-2xl font-black text-rose-700 font-mono mt-2">{stats.netLossCount}</span>
-        </div>
-        <div className="bg-amber-50/50 p-4 rounded-2xl border border-amber-100 shadow-sm flex flex-col justify-between">
-          <span className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Di Bawah Eceran</span>
-          <span className="text-2xl font-black text-amber-700 font-mono mt-2">{stats.underRetail}</span>
-        </div>
-      </div>
+      )}
 
       {/* EXPORT OPTIONS PANEL */}
       {shopeeTabMode === 'price' && (
@@ -1191,6 +1679,98 @@ export default function ShopeeTab({
         </div>
       )}
 
+      {/* CAMPAIGN OPTIONS PANEL */}
+      {shopeeTabMode === 'campaign' && (
+        <div className="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/20 p-5 rounded-2xl shadow-sm space-y-4 animate-in fade-in duration-200">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <FileSpreadsheet className="w-4 h-4 text-amber-600" /> Simulasi & Verifikasi Campaign Shopee
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Unggah file XLSX Campaign Shopee untuk memverifikasi apakah harga diskon/rekomendasi Shopee tidak rugi terhadap HPP sistem.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* UPLOAD FILE */}
+              <label className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer shadow-sm transition-colors select-none">
+                <Upload className="w-3.5 h-3.5 text-indigo-600" />
+                <span>{campaignFileName ? 'Ganti File Campaign' : 'Unggah File Campaign'}</span>
+                <input
+                  type="file"
+                  accept=".xlsx, .xls"
+                  onChange={handleUploadCampaignFile}
+                  className="hidden"
+                />
+              </label>
+
+              {campaignItems.length > 0 && (
+                <>
+                  {/* AUTO-FIX SELECTION */}
+                  <div className="flex items-center gap-2 bg-white border border-slate-200 p-1.5 px-3 rounded-xl shadow-sm text-xs">
+                    <span className="font-semibold text-slate-500">Target Margin:</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="100"
+                      value={campaignFixMargin}
+                      onChange={e => setCampaignFixMargin(Number(e.target.value) || 0)}
+                      className="w-10 text-center font-bold font-mono text-indigo-600 bg-slate-50 border border-slate-200 rounded py-0.5 px-1 outline-none"
+                    />
+                    <span className="font-bold text-slate-400">%</span>
+                    <button
+                      onClick={handleAutoFixCampaignPrices}
+                      className="bg-amber-600 hover:bg-amber-700 text-white font-extrabold px-3 py-1 rounded-lg transition-colors ml-1"
+                    >
+                      Perbaiki Harga Rugi
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={handleDownloadFixedCampaignXLSX}
+                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase tracking-wider px-5 py-3 rounded-xl shadow-sm transition-all duration-150 active:scale-95"
+                  >
+                    <Download className="w-4 h-4" />
+                    Unduh XLSX Hasil Perbaikan
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {campaignFileName && (
+            <div className="text-xs flex items-center gap-2 bg-slate-100 p-2.5 px-3.5 rounded-xl border border-slate-200/50">
+              <span className="font-bold text-slate-600">File Terunggah:</span>
+              <span className="font-mono text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">{campaignFileName}</span>
+              <span className="text-slate-400">|</span>
+              <span className="text-slate-500 font-medium">Terbaca <strong className="text-slate-700">{campaignItems.length}</strong> baris produk campaign.</span>
+            </div>
+          )}
+
+          {campaignError && (
+            <div className="bg-red-50 border border-red-200 text-red-700 p-3.5 rounded-xl text-xs flex items-start gap-2.5 shadow-sm">
+              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold">Error File Campaign:</span> {campaignError}
+              </div>
+            </div>
+          )}
+
+          <div className="bg-white/80 border border-amber-500/10 p-3.5 rounded-xl text-[11px] text-amber-800 space-y-1 font-medium leading-relaxed">
+            <span className="font-bold flex items-center gap-1.5 text-amber-950 mb-1">
+              <Info className="w-3.5 h-3.5 text-amber-600" /> Panduan Simulasi Campaign Shopee:
+            </span>
+            <ul className="list-disc pl-4 space-y-0.5 mt-1">
+              <li>Unduh file campaign XLSX dari Shopee Seller Centre (pada menu Promosi Shopee &gt; Campaign).</li>
+              <li>Unggah file tersebut ke sini untuk membandingkan nominal <span className="font-bold">Harga Diskon</span> atau <span className="font-bold">Rekomendasi Harga Diskon</span> dari Shopee dengan HPP sistem.</li>
+              <li>Perhitungan keuntungan menyertakan potongan biaya potongan Marketplace &amp; Campaign ({((Number(fees?.adminFee) || 0) + (Number(fees?.layananXtra) || 0) + (Number(fees?.insurance) || 0) + (Number(fees?.komisiAMS) || 0) + (Number(fees?.campaignFee) || 0)).toFixed(1)}% + {formatIDR((Number(fees?.marketplaceProcessingFee) || 0) + (Number(fees?.jubelioProcessingFee) || 0) + (Number(fees?.packingFee) || 0))}).</li>
+              <li>Gunakan tombol <span className="font-bold">"Perbaiki Harga Rugi"</span> untuk menaikkan harga diskon secara otomatis ke target margin aman (misal 20% margin atau sesuai input) agar tidak boncos.</li>
+              <li>Terakhir, klik <span className="font-bold">"Unduh XLSX Hasil Perbaikan"</span> untuk mengunduh file Excel yang telah diperbaiki yang bisa langsung diunggah kembali ke Shopee Seller Centre.</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
       {/* MAIN CONTAINER */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         {/* FILTERS & SEARCH */}
@@ -1201,7 +1781,7 @@ export default function ShopeeTab({
               <input
                 type="text"
                 className="w-full p-2.5 pl-9 border border-slate-200 bg-white rounded-xl text-sm focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 outline-none transition-all"
-                placeholder="Cari SKU, Nama Produk, atau Variasi..."
+                placeholder={shopeeTabMode === 'campaign' ? "Cari Nama, ID Produk, atau Variasi..." : "Cari SKU, Nama Produk, atau Variasi..."}
                 value={searchTerm}
                 onChange={e => {
                   setSearchTerm(e.target.value);
@@ -1209,81 +1789,150 @@ export default function ShopeeTab({
                 }}
               />
             </div>
-            <label className="inline-flex items-center gap-2 bg-white border border-slate-200 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-700 shadow-sm cursor-pointer hover:bg-slate-50 select-none transition-all whitespace-nowrap">
-              <input
-                type="checkbox"
-                checked={only5DigitSku}
-                onChange={e => {
-                  setOnly5DigitSku(e.target.checked);
-                  setDisplayLimit(50);
-                }}
-                className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
-              />
-              Hanya SKU 5 Digit
-            </label>
+            {shopeeTabMode !== 'campaign' && (
+              <label className="inline-flex items-center gap-2 bg-white border border-slate-200 px-3 py-2.5 rounded-xl text-xs font-bold text-slate-700 shadow-sm cursor-pointer hover:bg-slate-50 select-none transition-all whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  checked={only5DigitSku}
+                  onChange={e => {
+                    setOnly5DigitSku(e.target.checked);
+                    setDisplayLimit(50);
+                  }}
+                  className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                />
+                Hanya SKU 5 Digit
+              </label>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-1.5 w-full lg:w-auto">
-            <button
-              onClick={() => setFilterType('all')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                filterType === 'all'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              Semua
-            </button>
-            <button
-              onClick={() => setFilterType('matched')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                filterType === 'matched'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              Terhubung ({stats.matched})
-            </button>
-            <button
-              onClick={() => setFilterType('unmatched')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                filterType === 'unmatched'
-                  ? 'bg-indigo-600 text-white shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              SKU Baru ({stats.unmatched})
-            </button>
-            <button
-              onClick={() => setFilterType('netProfit')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                filterType === 'netProfit'
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
-              }`}
-            >
-              Untung Bersih ({stats.netProfitCount})
-            </button>
-            <button
-              onClick={() => setFilterType('netLoss')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                filterType === 'netLoss'
-                  ? 'bg-rose-600 text-white shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-rose-50 hover:text-rose-700'
-              }`}
-            >
-              Rugi Bersih ({stats.netLossCount})
-            </button>
-            <button
-              onClick={() => setFilterType('underRetail')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                filterType === 'underRetail'
-                  ? 'bg-amber-600 text-white shadow-sm'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-amber-50 hover:text-amber-700'
-              }`}
-            >
-              Di Bawah Eceran ({stats.underRetail})
-            </button>
+            {shopeeTabMode === 'campaign' ? (
+              <>
+                <button
+                  onClick={() => setFilterType('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'all'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Semua ({campaignStats.total})
+                </button>
+                <button
+                  onClick={() => setFilterType('matched')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'matched'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Terhubung ({campaignStats.matched})
+                </button>
+                <button
+                  onClick={() => setFilterType('unmatched')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'unmatched'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Induk/Varian Baru ({campaignStats.unmatched})
+                </button>
+                <button
+                  onClick={() => setFilterType('campaignNetProfit')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'campaignNetProfit'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
+                  }`}
+                >
+                  Diskon Untung ({campaignStats.netProfitDiskonCount})
+                </button>
+                <button
+                  onClick={() => setFilterType('campaignNetLoss')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'campaignNetLoss'
+                      ? 'bg-rose-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-rose-50 hover:text-rose-700'
+                  }`}
+                >
+                  Diskon Rugi ({campaignStats.netLossDiskonCount})
+                </button>
+                <button
+                  onClick={() => setFilterType('campaignRecLoss')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'campaignRecLoss'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-amber-50 hover:text-amber-700'
+                  }`}
+                >
+                  Rekomendasi Rugi ({campaignStats.netLossRekomendasiCount})
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => setFilterType('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'all'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Semua
+                </button>
+                <button
+                  onClick={() => setFilterType('matched')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'matched'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Terhubung ({stats.matched})
+                </button>
+                <button
+                  onClick={() => setFilterType('unmatched')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'unmatched'
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  SKU Baru ({stats.unmatched})
+                </button>
+                <button
+                  onClick={() => setFilterType('netProfit')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'netProfit'
+                      ? 'bg-emerald-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
+                  }`}
+                >
+                  Untung Bersih ({stats.netProfitCount})
+                </button>
+                <button
+                  onClick={() => setFilterType('netLoss')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'netLoss'
+                      ? 'bg-rose-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-rose-50 hover:text-rose-700'
+                  }`}
+                >
+                  Rugi Bersih ({stats.netLossCount})
+                </button>
+                <button
+                  onClick={() => setFilterType('underRetail')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    filterType === 'underRetail'
+                      ? 'bg-amber-600 text-white shadow-sm'
+                      : 'bg-white border border-slate-200 text-slate-600 hover:bg-amber-50 hover:text-amber-700'
+                  }`}
+                >
+                  Di Bawah Eceran ({stats.underRetail})
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -1291,7 +1940,16 @@ export default function ShopeeTab({
         <div className="overflow-x-auto custom-scrollbar">
           <table className="w-full text-left border-collapse text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              {shopeeTabMode === 'price' ? (
+              {shopeeTabMode === 'campaign' ? (
+                <tr>
+                  <th className="p-4 min-w-[200px] max-w-[240px]">Produk Campaign</th>
+                  <th className="p-4">Kode ID Shopee (Prod / Varian)</th>
+                  <th className="p-4 text-right bg-indigo-50/30">Harga Awal & Saat Ini</th>
+                  <th className="p-4 border-l border-slate-200">Kecocokan Master (HPP)</th>
+                  <th className="p-4 text-center">Harga Diskon (Simulasi)</th>
+                  <th className="p-4 text-center">Rekomendasi Shopee</th>
+                </tr>
+              ) : shopeeTabMode === 'price' ? (
                 <tr>
                   <th className="p-4 min-w-[200px] max-w-[240px]">Produk {shopName}</th>
                   <th className="p-4">SKU Shopee (Induk / Var)</th>
@@ -1321,6 +1979,146 @@ export default function ShopeeTab({
                     </div>
                   </td>
                 </tr>
+              ) : shopeeTabMode === 'campaign' ? (
+                campaignItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-12 text-center text-slate-400 text-sm font-semibold">
+                      <div className="flex flex-col items-center gap-2 py-4">
+                        <FileSpreadsheet className="w-8 h-8 text-indigo-500 animate-pulse" />
+                        <span>Belum ada data campaign. Silakan unggah file campaign XLSX terlebih dahulu.</span>
+                      </div>
+                    </td>
+                  </tr>
+                ) : filteredCampaignItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-12 text-center text-slate-400 text-sm font-semibold">
+                      Tidak ditemukan data produk campaign yang cocok dengan kriteria filter.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredCampaignItems.slice(0, displayLimit).map((item, idx) => {
+                    const hasMatch = !!item.matchedProduct;
+                    const matchingSku = item.matchedSku;
+
+                    return (
+                      <tr key={`${item.productId}-${item.variationId}-${idx}`} className="hover:bg-slate-50/50 transition-colors">
+                        {/* PRODUCT NAME & IDS */}
+                        <td className="p-4 max-w-[240px]">
+                          <div className="font-bold text-xs text-slate-800 line-clamp-2 leading-relaxed whitespace-normal" title={item.productName}>
+                            {item.productName}
+                          </div>
+                          {item.variationName && (
+                            <div className="text-[10px] text-indigo-600 font-bold mt-1 bg-indigo-50/50 px-1.5 py-0.5 rounded border border-indigo-100/40 inline-block max-w-full truncate" title={item.variationName}>
+                              Var: {item.variationName}
+                            </div>
+                          )}
+                          <div className="text-[9px] text-slate-400 mt-1 font-mono">
+                            ID: {item.productId} {item.variationId && `/ Var: ${item.variationId}`}
+                          </div>
+                        </td>
+
+                        {/* CODES / COLS */}
+                        <td className="p-4 font-mono text-[11px] text-slate-600 leading-normal">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[9px] text-slate-400 font-sans uppercase font-bold tracking-wider">L1:</span>
+                            <span className="font-bold text-slate-700 truncate max-w-[120px]" title={item.categoryL1 || '-'}>{item.categoryL1 || '-'}</span>
+                            <span className="text-[9px] text-slate-400 font-sans uppercase font-bold tracking-wider mt-1">Stok Promo / Batas:</span>
+                            <span className="font-bold text-slate-700 truncate max-w-[120px]">{item.promoStock} / {item.purchaseLimit === 0 ? 'Unlimited' : item.purchaseLimit}</span>
+                          </div>
+                        </td>
+
+                        {/* ORIGINAL PRICE & CURRENT PRICE */}
+                        <td className="p-4 text-right bg-indigo-50/10 font-mono text-xs">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[9px] text-slate-400 font-sans font-semibold">Harga Awal:</span>
+                            <span className="text-slate-500 font-medium">{formatIDR(item.originalPrice)}</span>
+                            <span className="text-[9px] text-slate-400 font-sans font-semibold mt-1">Harga Saat Ini:</span>
+                            <span className="text-indigo-600 font-bold">{formatIDR(item.currentPrice)}</span>
+                          </div>
+                        </td>
+
+                        {/* MATCH MASTER HPP */}
+                        <td className="p-4 border-l border-slate-100">
+                          {hasMatch ? (
+                            <div className="max-w-[220px] flex flex-col gap-1.5">
+                              <div className="font-bold text-xs text-emerald-700 flex items-center gap-1">
+                                <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0" />
+                                <span className="truncate" title={matchingSku || ''}>{matchingSku}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 line-clamp-1 whitespace-normal font-bold">
+                                HPP: <span className="text-slate-700 font-mono">{formatIDR(item.matchedProduct?.hpp || 0)}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-400 line-clamp-1 whitespace-normal">
+                                {item.matchedProduct?.name}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-[10px] text-slate-400 font-semibold italic flex items-center gap-1 py-1 bg-slate-50 px-2 rounded-lg border border-slate-100">
+                              <HelpCircle className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                              <span>Tidak cocok di master</span>
+                            </div>
+                          )}
+                        </td>
+
+                        {/* SIMULATED CAMPAIGN PRICE ANALYSIS */}
+                        <td className="p-4 border-l border-slate-100 bg-slate-50/30">
+                          <div className="flex flex-col items-center gap-1 text-center">
+                            {item.campaignPrice > 0 ? (
+                              <>
+                                <span className="font-mono font-black text-xs text-slate-800">{formatIDR(item.campaignPrice)}</span>
+                                {hasMatch ? (
+                                  <>
+                                    <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 mt-0.5 ${
+                                      item.isNetProfitDiskon ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50 text-rose-700 border border-rose-100'
+                                    }`}>
+                                      {item.isNetProfitDiskon ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                                      <span>Margin: {item.netMarginDiskon.toFixed(1)}%</span>
+                                    </div>
+                                    <span className={`text-[9px] font-semibold ${item.isNetProfitDiskon ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                      Net: {formatIDR(item.netProfitDiskon)}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <span className="text-[9px] text-slate-400 font-medium">Bukan Master SKU</span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 italic">Belum diisi</span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* SHOPEE RECOMMENDED PRICE ANALYSIS */}
+                        <td className="p-4 border-l border-slate-100">
+                          <div className="flex flex-col items-center gap-1 text-center">
+                            {item.recommendedPrice > 0 ? (
+                              <>
+                                <span className="font-mono font-bold text-xs text-slate-700">{formatIDR(item.recommendedPrice)}</span>
+                                {hasMatch ? (
+                                  <>
+                                    <div className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 mt-0.5 ${
+                                      item.isNetProfitRekomendasi ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-rose-50/70 text-rose-700 border border-rose-100'
+                                    }`}>
+                                      {item.isNetProfitRekomendasi ? <CheckCircle2 className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+                                      <span>Margin: {item.netMarginRekomendasi.toFixed(1)}%</span>
+                                    </div>
+                                    <span className={`text-[9px] font-semibold ${item.isNetProfitRekomendasi ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                      Net: {formatIDR(item.netProfitRekomendasi)}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <span className="text-[9px] text-slate-400 font-medium">Bukan Master SKU</span>
+                                )}
+                              </>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 italic">-</span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )
               ) : filteredItems.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="p-12 text-center text-slate-400 text-sm font-semibold">
@@ -1566,15 +2364,28 @@ export default function ShopeeTab({
         </div>
 
         {/* LOAD MORE */}
-        {filteredItems.length > displayLimit && (
-          <div className="p-4 bg-slate-50 text-center border-t border-slate-100">
-            <button
-              onClick={() => setDisplayLimit(prev => prev + 50)}
-              className="px-4 py-2 text-xs font-bold text-indigo-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl shadow-sm transition-all active:scale-98"
-            >
-              Tampilkan Lebih Banyak (Sisa {filteredItems.length - displayLimit} Produk)
-            </button>
-          </div>
+        {shopeeTabMode === 'campaign' ? (
+          filteredCampaignItems.length > displayLimit && (
+            <div className="p-4 bg-slate-50 text-center border-t border-slate-100">
+              <button
+                onClick={() => setDisplayLimit(prev => prev + 50)}
+                className="px-4 py-2 text-xs font-bold text-indigo-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl shadow-sm transition-all active:scale-98"
+              >
+                Tampilkan Lebih Banyak (Sisa {filteredCampaignItems.length - displayLimit} Produk Campaign)
+              </button>
+            </div>
+          )
+        ) : (
+          filteredItems.length > displayLimit && (
+            <div className="p-4 bg-slate-50 text-center border-t border-slate-100">
+              <button
+                onClick={() => setDisplayLimit(prev => prev + 50)}
+                className="px-4 py-2 text-xs font-bold text-indigo-600 bg-white hover:bg-slate-100 border border-slate-200 rounded-xl shadow-sm transition-all active:scale-98"
+              >
+                Tampilkan Lebih Banyak (Sisa {filteredItems.length - displayLimit} Produk)
+              </button>
+            </div>
+          )
         )}
       </div>
 
@@ -1582,14 +2393,29 @@ export default function ShopeeTab({
       <div className="bg-indigo-900/5 p-5 rounded-2xl border border-indigo-100 shadow-sm flex items-start gap-4">
         <Info className="w-5 h-5 text-indigo-600 flex-shrink-0 mt-0.5" />
         <div className="text-xs text-slate-600 leading-relaxed">
-          <span className="font-bold text-indigo-950 block mb-1">Tips Analisa {shopName}:</span>
-          1. Sistem mencocokkan produk {shopName} dengan sistem internal berdasarkan SKU Induk (kolom 5) terlebih dahulu. Jika tidak ditemukan kecocokan, sistem akan mencoba mencocokkan berdasarkan SKU Variasi (kolom 6).
-          <br />
-          2. <span className="font-bold text-indigo-950">Analisa Selisih Baru</span> menghitung <span className="font-bold text-emerald-700">Profit Bersih</span> setelah harga tayang {shopName} dikurangi rincian detail biaya marketplace (Admin, Layanan Xtra, Asuransi, Komisi AMS, Biaya Proses MP & Jubelio, serta biaya Packing) dan biaya Promosi Campaign aktif di kalkulator.
-          <br />
-          3. Indikator <span className="font-bold text-rose-700 bg-rose-50 px-1 py-0.5 rounded">⚠️ RUGI BERSIH</span> muncul jika pendapatan bersih setelah potongan biaya lebih kecil daripada HPP produk Anda.
-          <br />
-          4. Klik tombol <span className="font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">Kalkulator</span> pada baris produk yang sesuai untuk membuka produk tersebut di Kalkulator Utama guna menyesuaikan rincian margin, pembulatan, biaya admin, dan simulasi skema harga grosir/eceran dengan tepat.
+          {shopeeTabMode === 'campaign' ? (
+            <>
+              <span className="font-bold text-indigo-950 block mb-1">Tips Analisa Campaign Shopee:</span>
+              1. Sistem mencocokkan produk campaign dengan database internal berdasarkan <span className="font-bold text-indigo-900">ID Produk & ID Variasi</span> Shopee (kolom pertama & kedua dari file campaign).
+              <br />
+              2. <span className="font-bold text-indigo-950">Harga Diskon (Simulasi)</span> menghitung laba bersih jika Anda ikut program dengan harga diskon yang Anda tentukan. <span className="font-bold text-rose-700 bg-rose-50 px-1 py-0.5 rounded">Diskon Rugi</span> menunjukkan margin minus setelah dikurangi semua rincian biaya admin marketplace dan packing.
+              <br />
+              3. <span className="font-bold text-indigo-950">Rekomendasi Shopee</span> menganalisis apakah harga promo yang disarankan oleh Shopee aman (untung) atau rugi jika disetujui. Gunakan filter <span className="font-bold text-amber-700">Rekomendasi Rugi</span> untuk langsung menyaring semua produk yang rugi jika mengikuti harga rekomendasi Shopee.
+              <br />
+              4. Gunakan fitur <span className="font-bold text-indigo-700">Auto-Fix</span> untuk otomatis menyesuaikan harga campaign dan harga rekomendasi yang rugi agar dinaikkan sampai mencapai minimal margin target.
+            </>
+          ) : (
+            <>
+              <span className="font-bold text-indigo-950 block mb-1">Tips Analisa {shopName}:</span>
+              1. Sistem mencocokkan produk {shopName} dengan sistem internal berdasarkan SKU Induk (kolom 5) terlebih dahulu. Jika tidak ditemukan kecocokan, sistem akan mencoba mencocokkan berdasarkan SKU Variasi (kolom 6).
+              <br />
+              2. <span className="font-bold text-indigo-950">Analisa Selisih Baru</span> menghitung <span className="font-bold text-emerald-700">Profit Bersih</span> setelah harga tayang {shopName} dikurangi rincian detail biaya marketplace (Admin, Layanan Xtra, Asuransi, Komisi AMS, Biaya Proses MP & Jubelio, serta biaya Packing) dan biaya Promosi Campaign aktif di kalkulator.
+              <br />
+              3. Indikator <span className="font-bold text-rose-700 bg-rose-50 px-1 py-0.5 rounded">⚠️ RUGI BERSIH</span> muncul jika pendapatan bersih setelah potongan biaya lebih kecil daripada HPP produk Anda.
+              <br />
+              4. Klik tombol <span className="font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">Kalkulator</span> pada baris produk yang sesuai untuk membuka produk tersebut di Kalkulator Utama guna menyesuaikan rincian margin, pembulatan, biaya admin, dan simulasi skema harga grosir/eceran dengan tepat.
+            </>
+          )}
         </div>
       </div>
     </div>
