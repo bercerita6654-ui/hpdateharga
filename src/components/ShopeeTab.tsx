@@ -157,12 +157,15 @@ export default function ShopeeTab({
   const [campaignFileName, setCampaignFileName] = useState<string | null>(null);
   const [campaignError, setCampaignError] = useState<string | null>(null);
   const [idxCampaignPriceCol, setIdxCampaignPriceCol] = useState<number>(-1);
+  const [idxCampaignProductIdCol, setIdxCampaignProductIdCol] = useState<number>(-1);
+  const [idxCampaignVariationIdCol, setIdxCampaignVariationIdCol] = useState<number>(-1);
   const [idxRecommendedPriceCol, setIdxRecommendedPriceCol] = useState<number>(-1);
   const [campaignHeaderRowIdx, setCampaignHeaderRowIdx] = useState<number>(-1);
   const [campaignDataStartRowIdx, setCampaignDataStartRowIdx] = useState<number>(-1);
   const [campaignFixMargin, setCampaignFixMargin] = useState<number>(2); // Default target margin to cover tiny variations
   const [marginThreshold, setMarginThreshold] = useState<number>(20); // Default threshold at 20%
   const [campaignDownloadMode, setCampaignDownloadMode] = useState<'all' | 'selected'>('all'); // 'all' keeps all template rows, 'selected' only exports checked ones
+  const [originalCampaignSheetName, setOriginalCampaignSheetName] = useState<string>('sales_info');
   const [stockListMap, setStockListMap] = useState<Record<string, number>>({});
   const [isStockLoading, setIsStockLoading] = useState(false);
   const [stockError, setStockError] = useState<string | null>(null);
@@ -175,6 +178,7 @@ export default function ShopeeTab({
     return campaignSheetUrl || '';
   });
   const [selectedCampaignKeys, setSelectedCampaignKeys] = useState<Record<string, boolean>>({});
+  const [selectedPriceKeys, setSelectedPriceKeys] = useState<Record<string, boolean>>({});
 
   const getItemStock = (item: ShopeeProduct) => {
     const key = `${item.productId}-${item.variationId}`;
@@ -220,108 +224,123 @@ export default function ShopeeTab({
       rows.push(["", "", "", "", "", "", "", "", "", "", "", "", "", "", ""]);
     }
 
-    // Now append each item in filteredItems (the ones that match filters/search)
+    const checkedCount = filteredItems.filter(item => {
+      const key = `${item.productId}-${item.variationId}`;
+      return selectedPriceKeys[key] !== false;
+    }).length;
+
+    if (checkedCount === 0) {
+      alert('Silakan pilih minimal satu produk yang dicentang untuk diunduh.');
+      return;
+    }
+
+    // Now append each item in filteredItems, keeping original price for unchecked ones
     filteredItems.forEach(item => {
+      const key = `${item.productId}-${item.variationId}`;
+      const isSelected = selectedPriceKeys[key] !== false;
+
       let finalPrice = item.price; // default to original Shopee price
 
-      if (includeFeesAndCampaign && item.matchedProduct) {
-        let targetNet = 0;
-        let margin = 0;
+      if (isSelected) {
+        if (includeFeesAndCampaign && item.matchedProduct) {
+          let targetNet = 0;
+          let margin = 0;
 
-        if (exportBaseType === 'hpp') {
-          const basePrice = item.matchedProduct.partai || item.matchedProduct.hpp || 0;
-          margin = exportMarginType === 'smart'
-            ? (getSmartMarginForSku ? getSmartMarginForSku(item.matchedProduct.sku) : 10)
-            : exportMarginVal;
-          targetNet = basePrice * (1 + margin / 100);
-        } else if (exportBaseType === 'eceran') {
-          targetNet = item.matchedProduct.eceran || 0;
-        } else if (exportBaseType === 'grosir') {
-          targetNet = item.matchedProduct.grosir || 0;
-        } else if (exportBaseType === 'partai') {
-          targetNet = item.matchedProduct.partai || 0;
-        }
+          if (exportBaseType === 'hpp') {
+            const basePrice = item.matchedProduct.partai || item.matchedProduct.hpp || 0;
+            margin = exportMarginType === 'smart'
+              ? (getSmartMarginForSku ? getSmartMarginForSku(item.matchedProduct.sku) : 10)
+              : exportMarginVal;
+            targetNet = basePrice * (1 + margin / 100);
+          } else if (exportBaseType === 'eceran') {
+            targetNet = item.matchedProduct.eceran || 0;
+          } else if (exportBaseType === 'grosir') {
+            targetNet = item.matchedProduct.grosir || 0;
+          } else if (exportBaseType === 'partai') {
+            targetNet = item.matchedProduct.partai || 0;
+          }
 
-        // Calculate total fees percent
-        const percentFees =
-          (Number(fees?.adminFee) || 0) +
-          (Number(fees?.layananXtra) || 0) +
-          (Number(fees?.insurance) || 0) +
-          (Number(fees?.komisiAMS) || 0) +
-          (Number(fees?.campaignFee) || 0);
+          // Calculate total fees percent
+          const percentFees =
+            (Number(fees?.adminFee) || 0) +
+            (Number(fees?.layananXtra) || 0) +
+            (Number(fees?.insurance) || 0) +
+            (Number(fees?.komisiAMS) || 0) +
+            (Number(fees?.campaignFee) || 0);
 
-        // Calculate total nominal fees
-        const fixedFees =
-          (Number(fees?.marketplaceProcessingFee) || 0) +
-          (Number(fees?.jubelioProcessingFee) || 0) +
-          (Number(fees?.packingFee) || 0);
+          // Calculate total nominal fees
+          const fixedFees =
+            (Number(fees?.marketplaceProcessingFee) || 0) +
+            (Number(fees?.jubelioProcessingFee) || 0) +
+            (Number(fees?.packingFee) || 0);
 
-        // Use precise reverse fee calculation:
-        const decimal = percentFees / 100;
-        let rawPrice = 0;
-        if (1 - decimal > 0) {
-          rawPrice = (targetNet + fixedFees) / (1 - decimal);
-        } else {
-          rawPrice = targetNet * (1 + decimal) + fixedFees;
-        }
-
-        // Apply rounding
-        if (rounding === '100') {
-          finalPrice = Math.ceil(rawPrice / 100) * 100;
-        } else if (rounding === '500') {
-          finalPrice = Math.ceil(rawPrice / 500) * 500;
-        } else if (rounding === '1000') {
-          finalPrice = Math.ceil(rawPrice / 1000) * 1000;
-        } else {
-          finalPrice = Math.round(rawPrice);
-        }
-      }
-
-      // Auto-Fix Loss-making products if enabled
-      if (autoFixLossProducts && item.matchedProduct) {
-        const systemHpp = item.matchedProduct.hpp || 0;
-        const percentFees =
-          (Number(fees?.adminFee) || 0) +
-          (Number(fees?.layananXtra) || 0) +
-          (Number(fees?.insurance) || 0) +
-          (Number(fees?.komisiAMS) || 0) +
-          (Number(fees?.campaignFee) || 0);
-
-        const fixedFees =
-          (Number(fees?.marketplaceProcessingFee) || 0) +
-          (Number(fees?.jubelioProcessingFee) || 0) +
-          (Number(fees?.packingFee) || 0);
-
-        const decimal = percentFees / 100;
-        
-        // Calculate net payout for the finalPrice
-        const currentFees = finalPrice * decimal + fixedFees;
-        const currentNetPayout = finalPrice - currentFees;
-        const currentNetProfit = currentNetPayout - systemHpp;
-
-        if (currentNetProfit < 0) {
-          // Calculate the minimum price to avoid loss (net profit = 0)
-          let minRawPrice = 0;
+          // Use precise reverse fee calculation:
+          const decimal = percentFees / 100;
+          let rawPrice = 0;
           if (1 - decimal > 0) {
-            minRawPrice = (systemHpp + fixedFees) / (1 - decimal);
+            rawPrice = (targetNet + fixedFees) / (1 - decimal);
           } else {
-            minRawPrice = systemHpp * (1 + decimal) + fixedFees;
+            rawPrice = targetNet * (1 + decimal) + fixedFees;
           }
 
-          let minPrice = 0;
-          // Apply active rounding
+          // Apply rounding
           if (rounding === '100') {
-            minPrice = Math.ceil(minRawPrice / 100) * 100;
+            finalPrice = Math.ceil(rawPrice / 100) * 100;
           } else if (rounding === '500') {
-            minPrice = Math.ceil(minRawPrice / 500) * 500;
+            finalPrice = Math.ceil(rawPrice / 500) * 500;
           } else if (rounding === '1000') {
-            minPrice = Math.ceil(minRawPrice / 1000) * 1000;
+            finalPrice = Math.ceil(rawPrice / 1000) * 1000;
           } else {
-            minPrice = Math.ceil(minRawPrice);
+            finalPrice = Math.round(rawPrice);
           }
+        }
 
-          if (finalPrice < minPrice) {
-            finalPrice = minPrice;
+        // Auto-Fix Loss-making products if enabled
+        if (autoFixLossProducts && item.matchedProduct) {
+          const systemHpp = item.matchedProduct.hpp || 0;
+          const percentFees =
+            (Number(fees?.adminFee) || 0) +
+            (Number(fees?.layananXtra) || 0) +
+            (Number(fees?.insurance) || 0) +
+            (Number(fees?.komisiAMS) || 0) +
+            (Number(fees?.campaignFee) || 0);
+
+          const fixedFees =
+            (Number(fees?.marketplaceProcessingFee) || 0) +
+            (Number(fees?.jubelioProcessingFee) || 0) +
+            (Number(fees?.packingFee) || 0);
+
+          const decimal = percentFees / 100;
+          
+          // Calculate net payout for the finalPrice
+          const currentFees = finalPrice * decimal + fixedFees;
+          const currentNetPayout = finalPrice - currentFees;
+          const currentNetProfit = currentNetPayout - systemHpp;
+
+          if (currentNetProfit < 0) {
+            // Calculate the minimum price to avoid loss (net profit = 0)
+            let minRawPrice = 0;
+            if (1 - decimal > 0) {
+              minRawPrice = (systemHpp + fixedFees) / (1 - decimal);
+            } else {
+              minRawPrice = systemHpp * (1 + decimal) + fixedFees;
+            }
+
+            let minPrice = 0;
+            // Apply active rounding
+            if (rounding === '100') {
+              minPrice = Math.ceil(minRawPrice / 100) * 100;
+            } else if (rounding === '500') {
+              minPrice = Math.ceil(minRawPrice / 500) * 500;
+            } else if (rounding === '1000') {
+              minPrice = Math.ceil(minRawPrice / 1000) * 1000;
+            } else {
+              minPrice = Math.ceil(minRawPrice);
+            }
+
+            if (finalPrice < minPrice) {
+              finalPrice = minPrice;
+            }
           }
         }
       }
@@ -349,6 +368,14 @@ export default function ShopeeTab({
         ];
       }
 
+      // Force Product ID and Variation ID to be string to prevent Excel precision loss or scientific notation
+      if (productRow[0] !== undefined && productRow[0] !== null) {
+        productRow[0] = String(productRow[0]).trim();
+      }
+      if (productRow[2] !== undefined && productRow[2] !== null) {
+        productRow[2] = String(productRow[2]).trim();
+      }
+
       // Update price at index 6 (Harga)
       if (productRow.length > 6) {
         productRow[6] = String(finalPrice);
@@ -360,7 +387,8 @@ export default function ShopeeTab({
     // Create Excel book and sheet
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Template_Update_Harga");
+    // Use the standard sheet name "sales_info" to prevent Shopee upload failures
+    XLSX.utils.book_append_sheet(wb, ws, "sales_info");
 
     const today = new Date();
     const dd = String(today.getDate()).padStart(2, '0');
@@ -412,8 +440,23 @@ export default function ShopeeTab({
       rows.push(["", "", "", "", "", "", "", ""]);
     }
 
+    const checkedCount = filteredItems.filter(item => {
+      const key = `${item.productId}-${item.variationId}`;
+      return selectedPriceKeys[key] !== false;
+    }).length;
+
+    if (checkedCount === 0) {
+      alert('Silakan pilih minimal satu produk yang dicentang untuk diunduh.');
+      return;
+    }
+
+    // Now append each item in filteredItems, keeping original stock for unchecked ones
     filteredItems.forEach(item => {
-      const currentStock = getItemStock(item);
+      const key = `${item.productId}-${item.variationId}`;
+      const isSelected = selectedPriceKeys[key] !== false;
+
+      // Determine the stock to write
+      const finalStock = isSelected ? getItemStock(item) : item.stock;
 
       let productRow: any[];
       if (item.originalRow) {
@@ -432,7 +475,7 @@ export default function ShopeeTab({
             item.variationSku,
             String(item.price), // Harga
             "", // GTIN
-            String(currentStock), // Stok
+            String(finalStock), // Stok
             "0", // Min
             "", "", "", "", ""
           ];
@@ -444,21 +487,29 @@ export default function ShopeeTab({
             item.variationName,
             item.parentSku,
             item.variationSku,
-            String(currentStock), // Stok
+            String(finalStock), // Stok
             "" // Alasan Gagal
           ];
         }
+      }
+
+      // Force Product ID and Variation ID to be string to prevent Excel precision loss or scientific notation
+      if (productRow[0] !== undefined && productRow[0] !== null) {
+        productRow[0] = String(productRow[0]).trim();
+      }
+      if (productRow[2] !== undefined && productRow[2] !== null) {
+        productRow[2] = String(productRow[2]).trim();
       }
 
       // If it's the 15-column format, Stock is at index 8.
       // If it's the 8-column format, Stock is at index 6.
       if (hasShopeeHeaders) {
         if (productRow.length > 8) {
-          productRow[8] = String(currentStock);
+          productRow[8] = String(finalStock);
         }
       } else {
         if (productRow.length > 6) {
-          productRow[6] = String(currentStock);
+          productRow[6] = String(finalStock);
         }
       }
 
@@ -467,7 +518,8 @@ export default function ShopeeTab({
 
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Template_Update_Stok");
+    // Use the standard sheet name "sales_info" to prevent Shopee upload failures
+    XLSX.utils.book_append_sheet(wb, ws, "sales_info");
 
     const today = new Date();
     const dd = String(today.getDate()).padStart(2, '0');
@@ -805,6 +857,8 @@ export default function ShopeeTab({
     const idxPurchaseLimit = getColIdx(['batas pembelian']);
 
     setIdxCampaignPriceCol(idxCampaignPrice);
+    setIdxCampaignProductIdCol(idxProductId);
+    setIdxCampaignVariationIdCol(idxVariationId);
     setIdxRecommendedPriceCol(idxRecommendedPrice);
 
     // Find data starting row (skip "Wajib", "Opsional", helper instructions)
@@ -928,6 +982,7 @@ export default function ShopeeTab({
         } else {
           const workbook = XLSX.read(data, { type: 'binary' });
           const sheetName = workbook.SheetNames[0];
+          setOriginalCampaignSheetName(sheetName || 'sales_info');
           const sheet = workbook.Sheets[sheetName];
           const rows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1 });
           parseCampaignRows(rows);
@@ -1045,6 +1100,16 @@ export default function ShopeeTab({
     const headerRows = originalCampaignRows.slice(0, campaignDataStartRowIdx).map(row => [...row]);
     const dataRows: any[][] = [];
 
+    const checkedCount = campaignItems.filter(item => {
+      const key = `${item.productId}-${item.variationId}`;
+      return selectedCampaignKeys[key] !== false;
+    }).length;
+
+    if (checkedCount === 0) {
+      alert('Silakan pilih minimal satu produk campaign yang dicentang untuk diunduh.');
+      return;
+    }
+
     campaignItems.forEach((item) => {
       const key = `${item.productId}-${item.variationId}`;
       const isSelected = selectedCampaignKeys[key] !== false;
@@ -1054,22 +1119,29 @@ export default function ShopeeTab({
         if (idxCampaignPriceCol !== -1) {
           rowCopy[idxCampaignPriceCol] = item.campaignPrice;
         }
+        // Force Product ID and Variation ID as string to prevent scientific notation / precision loss in Excel
+        if (idxCampaignProductIdCol !== -1 && rowCopy[idxCampaignProductIdCol] !== undefined && rowCopy[idxCampaignProductIdCol] !== null) {
+          rowCopy[idxCampaignProductIdCol] = String(rowCopy[idxCampaignProductIdCol]).trim();
+        }
+        if (idxCampaignVariationIdCol !== -1 && rowCopy[idxCampaignVariationIdCol] !== undefined && rowCopy[idxCampaignVariationIdCol] !== null) {
+          rowCopy[idxCampaignVariationIdCol] = String(rowCopy[idxCampaignVariationIdCol]).trim();
+        }
         dataRows.push(rowCopy);
       } else if (campaignDownloadMode === 'all') {
-        // Keep original row unchanged, preserving the original price in the template
         const rowCopy = [...item.originalRow];
+        // Force Product ID and Variation ID as string to prevent scientific notation / precision loss in Excel
+        if (idxCampaignProductIdCol !== -1 && rowCopy[idxCampaignProductIdCol] !== undefined && rowCopy[idxCampaignProductIdCol] !== null) {
+          rowCopy[idxCampaignProductIdCol] = String(rowCopy[idxCampaignProductIdCol]).trim();
+        }
+        if (idxCampaignVariationIdCol !== -1 && rowCopy[idxCampaignVariationIdCol] !== undefined && rowCopy[idxCampaignVariationIdCol] !== null) {
+          rowCopy[idxCampaignVariationIdCol] = String(rowCopy[idxCampaignVariationIdCol]).trim();
+        }
         dataRows.push(rowCopy);
       }
     });
 
-    if (dataRows.length === 0) {
-      alert('Silakan pilih minimal satu produk campaign untuk diunduh.');
-      return;
-    }
-
     if (campaignDownloadMode === 'all') {
-      const selectedCount = campaignItems.filter(item => selectedCampaignKeys[`${item.productId}-${item.variationId}`] !== false).length;
-      alert(`Mengunduh file ${format.toUpperCase()} berisi ${dataRows.length} produk campaign total (dengan ${selectedCount} produk ter-update sesuai pilihan checkbox).`);
+      alert(`Mengunduh file ${format.toUpperCase()} berisi ${dataRows.length} produk campaign total (dengan ${checkedCount} produk ter-update sesuai pilihan checkbox).`);
     } else {
       alert(`Mengunduh file ${format.toUpperCase()} hanya berisi ${dataRows.length} produk campaign yang dicentang.`);
     }
@@ -1097,7 +1169,9 @@ export default function ShopeeTab({
       document.body.removeChild(link);
     } else {
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Campaign_Shopee_Fixed");
+      // Use original sheet name to prevent Shopee upload failures (defaults to sales_info)
+      const sheetName = originalCampaignSheetName || 'sales_info';
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
       XLSX.writeFile(wb, `${fileName}.xlsx`);
     }
   };
@@ -2536,6 +2610,27 @@ export default function ShopeeTab({
                 </tr>
               ) : shopeeTabMode === 'price' ? (
                 <tr>
+                  <th className="p-4 w-16 text-center">
+                    <div className="flex flex-col items-center gap-1 justify-center">
+                      <input
+                        type="checkbox"
+                        id="select-all-price"
+                        checked={filteredItems.length > 0 && filteredItems.every(item => selectedPriceKeys[`${item.productId}-${item.variationId}`] !== false)}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          const next = { ...selectedPriceKeys };
+                          filteredItems.forEach(item => {
+                            next[`${item.productId}-${item.variationId}`] = checked;
+                          });
+                          setSelectedPriceKeys(next);
+                        }}
+                        className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                      />
+                      <label htmlFor="select-all-price" className="text-[8px] font-extrabold text-slate-400 cursor-pointer uppercase select-none tracking-wider block leading-none whitespace-nowrap">
+                        Pilih Semua
+                      </label>
+                    </div>
+                  </th>
                   <th className="p-4 min-w-[200px] max-w-[240px]">Produk {shopName}</th>
                   <th className="p-4">SKU Shopee (Induk / Var)</th>
                   <th className="p-4 text-right bg-indigo-50/30">Harga {shopName}</th>
@@ -2545,6 +2640,27 @@ export default function ShopeeTab({
                 </tr>
               ) : (
                 <tr>
+                  <th className="p-4 w-16 text-center">
+                    <div className="flex flex-col items-center gap-1 justify-center">
+                      <input
+                        type="checkbox"
+                        id="select-all-stock"
+                        checked={filteredItems.length > 0 && filteredItems.every(item => selectedPriceKeys[`${item.productId}-${item.variationId}`] !== false)}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          const next = { ...selectedPriceKeys };
+                          filteredItems.forEach(item => {
+                            next[`${item.productId}-${item.variationId}`] = checked;
+                          });
+                          setSelectedPriceKeys(next);
+                        }}
+                        className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                      />
+                      <label htmlFor="select-all-stock" className="text-[8px] font-extrabold text-slate-400 cursor-pointer uppercase select-none tracking-wider block leading-none whitespace-nowrap">
+                        Pilih Semua
+                      </label>
+                    </div>
+                  </th>
                   <th className="p-4 min-w-[200px] max-w-[240px]">Produk {shopName}</th>
                   <th className="p-4">SKU Shopee (Induk / Var)</th>
                   <th className="p-4 text-center bg-indigo-50/30">Stok Sheet</th>
@@ -2557,7 +2673,7 @@ export default function ShopeeTab({
             <tbody className="divide-y divide-slate-100">
               {isLoading ? (
                 <tr>
-                  <td colSpan={shopeeTabMode === 'campaign' ? 7 : 6} className="p-12 text-center text-slate-500">
+                  <td colSpan={7} className="p-12 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <RefreshCw className="w-6 h-6 animate-spin text-indigo-600" />
                       <span className="text-xs font-semibold">Mengunduh & menganalisa data {shopName}...</span>
@@ -2725,7 +2841,7 @@ export default function ShopeeTab({
                 )
               ) : filteredItems.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-12 text-center text-slate-400 text-sm font-semibold">
+                  <td colSpan={7} className="p-12 text-center text-slate-400 text-sm font-semibold">
                     Tidak ditemukan data produk {shopName} yang cocok dengan kriteria filter.
                   </td>
                 </tr>
@@ -2733,9 +2849,28 @@ export default function ShopeeTab({
                 filteredItems.slice(0, displayLimit).map((item, idx) => {
                   const hasMatch = !!item.matchedProduct;
                   const matchingSku = hasMatch ? item.matchedProduct?.sku : null;
+                  const key = `${item.productId}-${item.variationId}`;
+                  const isSelected = selectedPriceKeys[key] !== false;
 
                   return (
-                    <tr key={`${item.productId}-${item.variationId}-${idx}`} className="hover:bg-slate-50/50 transition-colors">
+                    <tr 
+                      key={`${item.productId}-${item.variationId}-${idx}`} 
+                      className={`hover:bg-slate-50/50 transition-colors ${isSelected ? '' : 'opacity-65 bg-slate-50/30'}`}
+                    >
+                      {/* SELECT CHECKBOX */}
+                      <td className="p-4 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => {
+                            setSelectedPriceKeys(prev => ({
+                              ...prev,
+                              [key]: e.target.checked
+                            }));
+                          }}
+                          className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                        />
+                      </td>
                       <td className="p-4 max-w-[240px]">
                         <div className="font-bold text-xs text-slate-800 line-clamp-2 leading-relaxed whitespace-normal" title={item.productName}>
                           {item.productName}
