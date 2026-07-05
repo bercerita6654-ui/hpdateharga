@@ -58,6 +58,23 @@ interface ShopeeCampaignItem {
   promoStock: number;
   purchaseLimit: number;
   originalRow: any[];
+  matchedProduct?: Product;
+  matchedSku?: string;
+  netPayoutDiskon?: number;
+  netProfitDiskon?: number;
+  isNetProfitDiskon?: boolean;
+  netMarginDiskon?: number;
+  totalFeesDiskon?: number;
+  netPayoutRekomendasi?: number;
+  netProfitRekomendasi?: number;
+  isNetProfitRekomendasi?: boolean;
+  netMarginRekomendasi?: number;
+  totalFeesRekomendasi?: number;
+  netPayoutCurrent?: number;
+  netProfitCurrent?: number;
+  isNetProfitCurrent?: boolean;
+  netMarginCurrent?: number;
+  totalFeesCurrent?: number;
 }
 
 interface ShopeeTabProps {
@@ -73,6 +90,7 @@ interface ShopeeTabProps {
   sheetUrl?: string;
   cacheKeyPrefix?: string;
   fileNamePrefix?: string;
+  campaignSheetUrl?: string;
 }
 
 export default function ShopeeTab({
@@ -87,7 +105,8 @@ export default function ShopeeTab({
   shopName = 'ShopeeBalist',
   sheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQUJWBw2EXirlxov14JNpI1h3ulExBcMQxQ5orpGZmpW7cMqUqMkU9E6OxJ4CBLd4ZvAW8tBmhmEEF6/pub?gid=1378584398&single=true&output=csv',
   cacheKeyPrefix = 'shopee_balist',
-  fileNamePrefix = 'Shopee_Update_Harga'
+  fileNamePrefix = 'Shopee_Update_Harga',
+  campaignSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQYvBsVpsVwVG0x6GLMZXGnpneOkSC9NWo1ptPoqA5UWIbw12Tdk5YBVmjMBIkgetjktVK_hqKRNvK9/pub?gid=295919763&single=true&output=csv'
 }: ShopeeTabProps) {
   const [shopeeItems, setShopeeItems] = useState<ShopeeProduct[]>([]);
   const [shopeeHeaderRows, setShopeeHeaderRows] = useState<string[][]>(() => {
@@ -142,9 +161,20 @@ export default function ShopeeTab({
   const [campaignHeaderRowIdx, setCampaignHeaderRowIdx] = useState<number>(-1);
   const [campaignDataStartRowIdx, setCampaignDataStartRowIdx] = useState<number>(-1);
   const [campaignFixMargin, setCampaignFixMargin] = useState<number>(2); // Default target margin to cover tiny variations
+  const [marginThreshold, setMarginThreshold] = useState<number>(20); // Default threshold at 20%
+  const [campaignDownloadMode, setCampaignDownloadMode] = useState<'all' | 'selected'>('all'); // 'all' keeps all template rows, 'selected' only exports checked ones
   const [stockListMap, setStockListMap] = useState<Record<string, number>>({});
   const [isStockLoading, setIsStockLoading] = useState(false);
   const [stockError, setStockError] = useState<string | null>(null);
+
+  // Google Sheets Campaign Sync states
+  const [isCampaignLoading, setIsCampaignLoading] = useState(false);
+  const [customCampaignUrl, setCustomCampaignUrl] = useState<string>(() => {
+    const saved = localStorage.getItem(`${cacheKeyPrefix}_campaign_sheet_url`);
+    if (saved) return saved;
+    return campaignSheetUrl || '';
+  });
+  const [selectedCampaignKeys, setSelectedCampaignKeys] = useState<Record<string, boolean>>({});
 
   const getItemStock = (item: ShopeeProduct) => {
     const key = `${item.productId}-${item.variationId}`;
@@ -697,6 +727,189 @@ export default function ShopeeTab({
     }
   };
 
+  const parseCSVToRows = (text: string): string[][] => {
+    const lines = text.split('\n');
+    const rows: string[][] = [];
+
+    const parseLineLocal = (str: string) => {
+      const arr = [];
+      let q = false,
+        s = 0;
+      for (let i = 0; i < str.length; i++) {
+        if (str[i] === '"') q = !q;
+        else if (str[i] === ',' && !q) {
+          arr.push(str.substring(s, i));
+          s = i + 1;
+        }
+      }
+      arr.push(str.substring(s));
+      return arr.map(v => v.replace(/^"|"$/g, '').replace(/""/g, '"').trim());
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+      const rawLine = lines[i].trim();
+      if (!rawLine) continue;
+      rows.push(parseLineLocal(rawLine));
+    }
+    return rows;
+  };
+
+  const parseCampaignRows = (rows: any[][]) => {
+    if (rows.length < 2) {
+      throw new Error('Data campaign kosong atau tidak valid.');
+    }
+
+    setOriginalCampaignRows(rows);
+
+    // Detect the header row (contains "kode produk" or "product id" or "nama produk" or similar)
+    let headerRowIndex = -1;
+    for (let i = 0; i < Math.min(10, rows.length); i++) {
+      const row = rows[i] as any[];
+      if (row && row.some(cell => {
+        const str = String(cell || '').toLowerCase();
+        return str.includes('kode produk') || str.includes('product id') || str.includes('nama produk');
+      })) {
+        headerRowIndex = i;
+        break;
+      }
+    }
+
+    if (headerRowIndex === -1) {
+      headerRowIndex = rows.length > 2 ? 2 : 0;
+    }
+
+    setCampaignHeaderRowIdx(headerRowIndex);
+
+    const headers = (rows[headerRowIndex] as any[]).map(h => String(h || '').trim());
+    
+    const getColIdx = (names: string[]) => {
+      return headers.findIndex(h => 
+        names.some(name => h.toLowerCase().includes(name.toLowerCase()))
+      );
+    };
+
+    const idxProductName = getColIdx(['nama produk']);
+    const idxProductId = getColIdx(['kode produk', 'product id']);
+    const idxVariationName = getColIdx(['nama variasi']);
+    const idxVariationId = getColIdx(['kode variasi', 'variation id']);
+    const idxCategoryL1 = getColIdx(['kategori shopee l1']);
+    const idxCategoryL2 = getColIdx(['kategori shopee l2']);
+    const idxCategoryL3 = getColIdx(['kategori shopee l3']);
+    const idxSales = getColIdx(['penjualan']);
+    const idxOriginalPrice = getColIdx(['harga awal']);
+    const idxCurrentPrice = getColIdx(['harga saat ini']);
+    const idxCampaignPrice = getColIdx(['harga diskon']);
+    const idxRecommendedPrice = getColIdx(['rekomendasi harga diskon']);
+    const idxStock = getColIdx(['stok']);
+    const idxPromoStock = getColIdx(['stok promo']);
+    const idxPurchaseLimit = getColIdx(['batas pembelian']);
+
+    setIdxCampaignPriceCol(idxCampaignPrice);
+    setIdxRecommendedPriceCol(idxRecommendedPrice);
+
+    // Find data starting row (skip "Wajib", "Opsional", helper instructions)
+    let dataStartRowIdx = headerRowIndex + 1;
+    while (dataStartRowIdx < rows.length) {
+      const row = rows[dataStartRowIdx] as any[];
+      if (row && row.length > 0) {
+        const firstCell = String(row[0] || '').trim();
+        const secondCell = String(row[1] || '').trim();
+        if (
+          firstCell.toLowerCase().includes('opsional') || 
+          firstCell.toLowerCase().includes('wajib') || 
+          firstCell.toLowerCase().includes('nama produk tersedia') || 
+          secondCell.toLowerCase().includes('mohon masukkan') ||
+          secondCell.toLowerCase().includes('wajib')
+        ) {
+          dataStartRowIdx++;
+          continue;
+        }
+        break;
+      }
+      dataStartRowIdx++;
+    }
+
+    setCampaignDataStartRowIdx(dataStartRowIdx);
+
+    const parsedCampaignItems: ShopeeCampaignItem[] = [];
+    const cleanNum = (val: any): number => {
+      if (val === undefined || val === null) return 0;
+      const s = String(val).replace(/[^0-9.-]/g, '');
+      return Number(s) || 0;
+    };
+
+    for (let i = dataStartRowIdx; i < rows.length; i++) {
+      const row = rows[i] as any[];
+      if (!row || row.length === 0) continue;
+
+      const productId = idxProductId !== -1 ? String(row[idxProductId] || '').trim() : '';
+      const variationId = idxVariationId !== -1 ? String(row[idxVariationId] || '').trim() : '';
+
+      if (!productId && !variationId) continue;
+
+      parsedCampaignItems.push({
+        productName: idxProductName !== -1 ? String(row[idxProductName] || '').trim() : '',
+        productId,
+        variationName: idxVariationName !== -1 ? String(row[idxVariationName] || '').trim() : '',
+        variationId,
+        categoryL1: idxCategoryL1 !== -1 ? String(row[idxCategoryL1] || '').trim() : '',
+        categoryL2: idxCategoryL2 !== -1 ? String(row[idxCategoryL2] || '').trim() : '',
+        categoryL3: idxCategoryL3 !== -1 ? String(row[idxCategoryL3] || '').trim() : '',
+        sales: idxSales !== -1 ? cleanNum(row[idxSales]) : 0,
+        originalPrice: idxOriginalPrice !== -1 ? cleanNum(row[idxOriginalPrice]) : 0,
+        currentPrice: idxCurrentPrice !== -1 ? cleanNum(row[idxCurrentPrice]) : 0,
+        campaignPrice: idxCampaignPrice !== -1 ? cleanNum(row[idxCampaignPrice]) : 0,
+        recommendedPrice: idxRecommendedPrice !== -1 ? cleanNum(row[idxRecommendedPrice]) : 0,
+        stock: idxStock !== -1 ? cleanNum(row[idxStock]) : 0,
+        promoStock: idxPromoStock !== -1 ? cleanNum(row[idxPromoStock]) : 0,
+        purchaseLimit: idxPurchaseLimit !== -1 ? cleanNum(row[idxPurchaseLimit]) : 0,
+        originalRow: row
+      });
+    }
+
+    if (parsedCampaignItems.length === 0) {
+      throw new Error('Tidak ada data produk kampanye yang valid. Silakan periksa format kolom excel.');
+    }
+
+    const initialSelected: Record<string, boolean> = {};
+    parsedCampaignItems.forEach(item => {
+      const key = `${item.productId}-${item.variationId}`;
+      initialSelected[key] = true;
+    });
+    setSelectedCampaignKeys(initialSelected);
+
+    setCampaignItems(parsedCampaignItems);
+  };
+
+  const fetchCampaignFromUrl = async (url: string) => {
+    if (!url) return;
+    setIsCampaignLoading(true);
+    setCampaignError(null);
+    try {
+      const res = await fetch(`${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`).catch(() => null);
+      if (!res || !res.ok) {
+        throw new Error('Gagal mengunduh data campaign dari Google Sheets. Pastikan URL benar dan telah dipublikasikan ke web sebagai CSV.');
+      }
+      const text = await res.text();
+      const rows = parseCSVToRows(text);
+      parseCampaignRows(rows);
+      setCampaignFileName(`Google Sheets (${shopName === 'GomallShopee' ? 'campaigngomall' : 'campaignbalist'})`);
+    } catch (err: any) {
+      setCampaignError(err.message || 'Gagal memproses file campaign dari Google Sheets.');
+      setCampaignItems([]);
+    } finally {
+      setIsCampaignLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (shopeeTabMode === 'campaign' && campaignItems.length === 0 && customCampaignUrl && !isCampaignLoading && !campaignError) {
+      if (!customCampaignUrl.includes('CHANGE_TO_GOMALL_GID')) {
+        fetchCampaignFromUrl(customCampaignUrl);
+      }
+    }
+  }, [shopeeTabMode, customCampaignUrl]);
+
   const handleUploadCampaignFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -708,131 +921,28 @@ export default function ShopeeTab({
     reader.onload = (evt) => {
       try {
         const data = evt.target?.result;
-        const workbook = XLSX.read(data, { type: 'binary' });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        
-        const rows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1 });
-        if (rows.length < 2) {
-          throw new Error('File excel kosong atau tidak valid.');
+        if (file.name.toLowerCase().endsWith('.csv')) {
+          const text = typeof data === 'string' ? data : new TextDecoder('utf-8').decode(data as ArrayBuffer);
+          const rows = parseCSVToRows(text);
+          parseCampaignRows(rows);
+        } else {
+          const workbook = XLSX.read(data, { type: 'binary' });
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1 });
+          parseCampaignRows(rows);
         }
-
-        setOriginalCampaignRows(rows);
-
-        // Detect the header row (contains "kode produk" or similar)
-        let headerRowIndex = -1;
-        for (let i = 0; i < Math.min(10, rows.length); i++) {
-          const row = rows[i] as any[];
-          if (row && row.some(cell => String(cell || '').toLowerCase().includes('kode produk'))) {
-            headerRowIndex = i;
-            break;
-          }
-        }
-
-        if (headerRowIndex === -1) {
-          headerRowIndex = rows.length > 2 ? 2 : 0;
-        }
-
-        setCampaignHeaderRowIdx(headerRowIndex);
-
-        const headers = (rows[headerRowIndex] as any[]).map(h => String(h || '').trim());
-        
-        const getColIdx = (names: string[]) => {
-          return headers.findIndex(h => 
-            names.some(name => h.toLowerCase().includes(name.toLowerCase()))
-          );
-        };
-
-        const idxProductName = getColIdx(['nama produk']);
-        const idxProductId = getColIdx(['kode produk', 'product id']);
-        const idxVariationName = getColIdx(['nama variasi']);
-        const idxVariationId = getColIdx(['kode variasi', 'variation id']);
-        const idxCategoryL1 = getColIdx(['kategori shopee l1']);
-        const idxCategoryL2 = getColIdx(['kategori shopee l2']);
-        const idxCategoryL3 = getColIdx(['kategori shopee l3']);
-        const idxSales = getColIdx(['penjualan']);
-        const idxOriginalPrice = getColIdx(['harga awal']);
-        const idxCurrentPrice = getColIdx(['harga saat ini']);
-        const idxCampaignPrice = getColIdx(['harga diskon']);
-        const idxRecommendedPrice = getColIdx(['rekomendasi harga diskon']);
-        const idxStock = getColIdx(['stok']);
-        const idxPromoStock = getColIdx(['stok promo']);
-        const idxPurchaseLimit = getColIdx(['batas pembelian']);
-
-        setIdxCampaignPriceCol(idxCampaignPrice);
-        setIdxRecommendedPriceCol(idxRecommendedPrice);
-
-        // Find data starting row (skip "Wajib", "Opsional", helper instructions)
-        let dataStartRowIdx = headerRowIndex + 1;
-        while (dataStartRowIdx < rows.length) {
-          const row = rows[dataStartRowIdx] as any[];
-          if (row && row.length > 0) {
-            const firstCell = String(row[0] || '').trim();
-            const secondCell = String(row[1] || '').trim();
-            if (
-              firstCell.toLowerCase().includes('opsional') || 
-              firstCell.toLowerCase().includes('wajib') || 
-              firstCell.toLowerCase().includes('nama produk tersedia') || 
-              secondCell.toLowerCase().includes('mohon masukkan') ||
-              secondCell.toLowerCase().includes('wajib')
-            ) {
-              dataStartRowIdx++;
-              continue;
-            }
-            break;
-          }
-          dataStartRowIdx++;
-        }
-
-        setCampaignDataStartRowIdx(dataStartRowIdx);
-
-        const parsedCampaignItems: ShopeeCampaignItem[] = [];
-        const cleanNum = (val: any): number => {
-          if (val === undefined || val === null) return 0;
-          const s = String(val).replace(/[^0-9.-]/g, '');
-          return Number(s) || 0;
-        };
-
-        for (let i = dataStartRowIdx; i < rows.length; i++) {
-          const row = rows[i] as any[];
-          if (!row || row.length === 0) continue;
-
-          const productId = idxProductId !== -1 ? String(row[idxProductId] || '').trim() : '';
-          const variationId = idxVariationId !== -1 ? String(row[idxVariationId] || '').trim() : '';
-
-          if (!productId && !variationId) continue;
-
-          parsedCampaignItems.push({
-            productName: idxProductName !== -1 ? String(row[idxProductName] || '').trim() : '',
-            productId,
-            variationName: idxVariationName !== -1 ? String(row[idxVariationName] || '').trim() : '',
-            variationId,
-            categoryL1: idxCategoryL1 !== -1 ? String(row[idxCategoryL1] || '').trim() : '',
-            categoryL2: idxCategoryL2 !== -1 ? String(row[idxCategoryL2] || '').trim() : '',
-            categoryL3: idxCategoryL3 !== -1 ? String(row[idxCategoryL3] || '').trim() : '',
-            sales: idxSales !== -1 ? cleanNum(row[idxSales]) : 0,
-            originalPrice: idxOriginalPrice !== -1 ? cleanNum(row[idxOriginalPrice]) : 0,
-            currentPrice: idxCurrentPrice !== -1 ? cleanNum(row[idxCurrentPrice]) : 0,
-            campaignPrice: idxCampaignPrice !== -1 ? cleanNum(row[idxCampaignPrice]) : 0,
-            recommendedPrice: idxRecommendedPrice !== -1 ? cleanNum(row[idxRecommendedPrice]) : 0,
-            stock: idxStock !== -1 ? cleanNum(row[idxStock]) : 0,
-            promoStock: idxPromoStock !== -1 ? cleanNum(row[idxPromoStock]) : 0,
-            purchaseLimit: idxPurchaseLimit !== -1 ? cleanNum(row[idxPurchaseLimit]) : 0,
-            originalRow: row
-          });
-        }
-
-        if (parsedCampaignItems.length === 0) {
-          throw new Error('Tidak ada data produk kampanye yang valid. Silakan periksa format kolom excel.');
-        }
-
-        setCampaignItems(parsedCampaignItems);
       } catch (err: any) {
-        setCampaignError(err.message || 'Gagal menguraikan file xlsx campaign.');
+        setCampaignError(err.message || 'Gagal menguraikan file campaign.');
         setCampaignItems([]);
       }
     };
-    reader.readAsBinaryString(file);
+
+    if (file.name.toLowerCase().endsWith('.csv')) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsBinaryString(file);
+    }
   };
 
   const handleAutoFixCampaignPrices = () => {
@@ -925,28 +1035,71 @@ export default function ShopeeTab({
     setCampaignItems(updated);
   };
 
-  const handleDownloadFixedCampaignXLSX = () => {
-    if (campaignItems.length === 0 || originalCampaignRows.length === 0) return;
+  const handleDownloadFixedCampaignFile = (format: 'xlsx' | 'csv') => {
+    if (campaignItems.length === 0 || originalCampaignRows.length === 0) {
+      alert('Data campaign kosong atau belum dimuat. Silakan sinkronkan data atau unggah file terlebih dahulu.');
+      return;
+    }
 
-    const rowsCopy = originalCampaignRows.map(row => [...row]);
-    
-    campaignItems.forEach((item, k) => {
-      const targetIdx = campaignDataStartRowIdx + k;
-      if (rowsCopy[targetIdx] && idxCampaignPriceCol !== -1) {
-        rowsCopy[targetIdx][idxCampaignPriceCol] = item.campaignPrice;
+    // Start with the exact same headers (rows up to campaignDataStartRowIdx)
+    const headerRows = originalCampaignRows.slice(0, campaignDataStartRowIdx).map(row => [...row]);
+    const dataRows: any[][] = [];
+
+    campaignItems.forEach((item) => {
+      const key = `${item.productId}-${item.variationId}`;
+      const isSelected = selectedCampaignKeys[key] !== false;
+
+      if (isSelected) {
+        const rowCopy = [...item.originalRow];
+        if (idxCampaignPriceCol !== -1) {
+          rowCopy[idxCampaignPriceCol] = item.campaignPrice;
+        }
+        dataRows.push(rowCopy);
+      } else if (campaignDownloadMode === 'all') {
+        // Keep original row unchanged, preserving the original price in the template
+        const rowCopy = [...item.originalRow];
+        dataRows.push(rowCopy);
       }
     });
 
-    const ws = XLSX.utils.aoa_to_sheet(rowsCopy);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Campaign_Shopee_Fixed");
+    if (dataRows.length === 0) {
+      alert('Silakan pilih minimal satu produk campaign untuk diunduh.');
+      return;
+    }
+
+    if (campaignDownloadMode === 'all') {
+      const selectedCount = campaignItems.filter(item => selectedCampaignKeys[`${item.productId}-${item.variationId}`] !== false).length;
+      alert(`Mengunduh file ${format.toUpperCase()} berisi ${dataRows.length} produk campaign total (dengan ${selectedCount} produk ter-update sesuai pilihan checkbox).`);
+    } else {
+      alert(`Mengunduh file ${format.toUpperCase()} hanya berisi ${dataRows.length} produk campaign yang dicentang.`);
+    }
+
+    const rowsCopy = [...headerRows, ...dataRows];
 
     const today = new Date();
     const dd = String(today.getDate()).padStart(2, '0');
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const yyyy = today.getFullYear();
+    const fileName = `Campaign_Shopee_Fixed_${dd}-${mm}-${yyyy}`;
 
-    XLSX.writeFile(wb, `Campaign_Shopee_Fixed_${dd}-${mm}-${yyyy}.xlsx`);
+    const ws = XLSX.utils.aoa_to_sheet(rowsCopy);
+
+    if (format === 'csv') {
+      const csvContent = XLSX.utils.sheet_to_csv(ws);
+      // To preserve UTF-8 and ensure Excel displays Indonesian characters correctly:
+      const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `${fileName}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Campaign_Shopee_Fixed");
+      XLSX.writeFile(wb, `${fileName}.xlsx`);
+    }
   };
 
   useEffect(() => {
@@ -1156,6 +1309,12 @@ export default function ShopeeTab({
       let netMarginRekomendasi = 0;
       let totalFeesRekomendasi = 0;
 
+      let netPayoutCurrent = 0;
+      let netProfitCurrent = 0;
+      let isNetProfitCurrent = false;
+      let netMarginCurrent = 0;
+      let totalFeesCurrent = 0;
+
       const totalPercent =
         (Number(fees?.adminFee) || 0) +
         (Number(fees?.layananXtra) || 0) +
@@ -1170,6 +1329,16 @@ export default function ShopeeTab({
 
       if (matchedProduct) {
         const systemHpp = matchedProduct.hpp || 0;
+
+        // Current Price (Harga Saat Ini / Harga Awal)
+        const currentPriceToUse = item.currentPrice > 0 ? item.currentPrice : item.originalPrice;
+        if (currentPriceToUse > 0) {
+          totalFeesCurrent = currentPriceToUse * decimal + fixed;
+          netPayoutCurrent = currentPriceToUse - totalFeesCurrent;
+          netProfitCurrent = netPayoutCurrent - systemHpp;
+          isNetProfitCurrent = netProfitCurrent >= 0;
+          netMarginCurrent = (netProfitCurrent / currentPriceToUse) * 100;
+        }
 
         // campaignPrice (Harga Diskon)
         if (item.campaignPrice > 0) {
@@ -1203,7 +1372,12 @@ export default function ShopeeTab({
         netProfitRekomendasi,
         isNetProfitRekomendasi,
         netMarginRekomendasi,
-        totalFeesRekomendasi
+        totalFeesRekomendasi,
+        netPayoutCurrent,
+        netProfitCurrent,
+        isNetProfitCurrent,
+        netMarginCurrent,
+        totalFeesCurrent
       };
     });
   }, [campaignItems, shopeeItems, systemProductMap, fees]);
@@ -1243,6 +1417,85 @@ export default function ShopeeTab({
       netLossRekomendasiCount
     };
   }, [analyzedCampaignItems]);
+
+  // Visual Campaign Summary (Current vs After Campaign Margins, Total Potential Loss below Threshold)
+  const campaignSummaryMetrics = useMemo(() => {
+    let totalSelectedMatched = 0;
+
+    let sumCurrentMargin = 0;
+    let countCurrentMargin = 0;
+
+    let sumCampaignMargin = 0;
+    let countCampaignMargin = 0;
+
+    let productsBelowThreshold = 0;
+    let productsActualLoss = 0;
+
+    let totalPotentialLossUnit = 0;
+    let totalPotentialLossSales = 0;
+
+    let totalShortfallUnit = 0;
+    let totalShortfallSales = 0;
+
+    analyzedCampaignItems.forEach(item => {
+      const key = `${item.productId}-${item.variationId}`;
+      const isSelected = selectedCampaignKeys[key] !== false;
+
+      if (isSelected && item.matchedProduct) {
+        totalSelectedMatched++;
+
+        // Current margin (already computed and stored)
+        const currentPriceToUse = item.currentPrice > 0 ? item.currentPrice : item.originalPrice;
+        if (currentPriceToUse > 0) {
+          const netMarginCurrent = item.netMarginCurrent || 0;
+          sumCurrentMargin += netMarginCurrent;
+          countCurrentMargin++;
+        }
+
+        // Campaign margin
+        if (item.campaignPrice > 0) {
+          const netMarginDiskon = item.netMarginDiskon || 0;
+          sumCampaignMargin += netMarginDiskon;
+          countCampaignMargin++;
+
+          // Is it below threshold?
+          if (netMarginDiskon < marginThreshold) {
+            productsBelowThreshold++;
+
+            const netProfitDiskon = item.netProfitDiskon || 0;
+            // Check if actual loss (negative margin / profit)
+            if (netProfitDiskon < 0) {
+              productsActualLoss++;
+              const lossVal = Math.abs(netProfitDiskon);
+              totalPotentialLossUnit += lossVal;
+              totalPotentialLossSales += lossVal * (item.sales || 0);
+            }
+
+            // Shortfall to reach threshold margin (e.g. 20%)
+            const targetNetProfit = item.campaignPrice * (marginThreshold / 100);
+            const shortfall = Math.max(0, targetNetProfit - netProfitDiskon);
+            totalShortfallUnit += shortfall;
+            totalShortfallSales += shortfall * (item.sales || 0);
+          }
+        }
+      }
+    });
+
+    const avgCurrentMargin = countCurrentMargin > 0 ? sumCurrentMargin / countCurrentMargin : 0;
+    const avgCampaignMargin = countCampaignMargin > 0 ? sumCampaignMargin / countCampaignMargin : 0;
+
+    return {
+      totalSelectedMatched,
+      avgCurrentMargin,
+      avgCampaignMargin,
+      productsBelowThreshold,
+      productsActualLoss,
+      totalPotentialLossUnit,
+      totalPotentialLossSales,
+      totalShortfallUnit,
+      totalShortfallSales
+    };
+  }, [analyzedCampaignItems, selectedCampaignKeys, marginThreshold]);
 
   // Search and Filter
   const filteredItems = useMemo(() => {
@@ -1294,6 +1547,13 @@ export default function ShopeeTab({
       return true;
     });
   }, [analyzedCampaignItems, searchTerm, filterType]);
+
+  const getSelectedCampaignCount = () => {
+    return campaignItems.filter(item => {
+      const key = `${item.productId}-${item.variationId}`;
+      return selectedCampaignKeys[key] !== false;
+    }).length;
+  };
 
   const handleSelectToCalculator = (sku: string, hpp: number, eceran: number) => {
     setSelectedSku(sku);
@@ -1374,31 +1634,210 @@ export default function ShopeeTab({
 
       {/* STATISTICS CARDS */}
       {shopeeTabMode === 'campaign' ? (
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 animate-in fade-in duration-200">
-          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Campaign SKU</span>
-            <span className="text-2xl font-black text-slate-800 font-mono mt-2">{campaignStats.total}</span>
+        <div className="space-y-6 animate-in fade-in duration-200">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total Campaign SKU</span>
+              <span className="text-2xl font-black text-slate-800 font-mono mt-2">{campaignStats.total}</span>
+            </div>
+            <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Terhubung Sistem</span>
+              <span className="text-2xl font-black text-indigo-700 font-mono mt-2">{campaignStats.matched}</span>
+            </div>
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Baru (Belum Ada)</span>
+              <span className="text-2xl font-black text-slate-700 font-mono mt-2">{campaignStats.unmatched}</span>
+            </div>
+            <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-between col-span-1">
+              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Input Diskon Untung</span>
+              <span className="text-2xl font-black text-emerald-700 font-mono mt-2">{campaignStats.netProfitDiskonCount}</span>
+            </div>
+            <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-between col-span-1">
+              <span className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Input Diskon Rugi</span>
+              <span className="text-2xl font-black text-rose-700 font-mono mt-2">{campaignStats.netLossDiskonCount}</span>
+            </div>
+            <div className="bg-amber-50/50 p-4 rounded-2xl border border-amber-100 shadow-sm flex flex-col justify-between col-span-1">
+              <span className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Rugi Rekomendasi Shopee</span>
+              <span className="text-2xl font-black text-rose-700 font-mono mt-2">{campaignStats.netLossRekomendasiCount}</span>
+            </div>
           </div>
-          <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100 shadow-sm flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Terhubung Sistem</span>
-            <span className="text-2xl font-black text-indigo-700 font-mono mt-2">{campaignStats.matched}</span>
-          </div>
-          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Baru (Belum Ada)</span>
-            <span className="text-2xl font-black text-slate-700 font-mono mt-2">{campaignStats.unmatched}</span>
-          </div>
-          <div className="bg-emerald-50/50 p-4 rounded-2xl border border-emerald-100 shadow-sm flex flex-col justify-between col-span-1">
-            <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Input Diskon Untung</span>
-            <span className="text-2xl font-black text-emerald-700 font-mono mt-2">{campaignStats.netProfitDiskonCount}</span>
-          </div>
-          <div className="bg-rose-50/50 p-4 rounded-2xl border border-rose-100 shadow-sm flex flex-col justify-between col-span-1">
-            <span className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Input Diskon Rugi</span>
-            <span className="text-2xl font-black text-rose-700 font-mono mt-2">{campaignStats.netLossDiskonCount}</span>
-          </div>
-          <div className="bg-amber-50/50 p-4 rounded-2xl border border-amber-100 shadow-sm flex flex-col justify-between col-span-1">
-            <span className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">Rugi Rekomendasi Shopee</span>
-            <span className="text-2xl font-black text-rose-700 font-mono mt-2">{campaignStats.netLossRekomendasiCount}</span>
-          </div>
+
+          {/* Card Ringkasan Visual Analisa Margin Campaign */}
+          {campaignItems.length > 0 && (
+            <div className="bg-slate-50 border border-slate-200/80 rounded-3xl p-6 shadow-sm space-y-6 animate-in fade-in duration-300">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 pb-5">
+                <div>
+                  <h4 className="font-bold text-slate-800 text-base flex items-center gap-2">
+                    <span className="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg">
+                      <TrendingUp className="w-5 h-5" />
+                    </span>
+                    Ringkasan Visual Analisa Margin Campaign
+                  </h4>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Analisa perbandingan margin rata-rata saat ini vs setelah diskon campaign untuk <span className="font-bold text-slate-700">{campaignSummaryMetrics.totalSelectedMatched} produk terpilih</span> yang terhubung ke master data.
+                  </p>
+                </div>
+                
+                {/* INTERACTIVE THRESHOLD INPUT */}
+                <div className="flex items-center gap-3 bg-white border border-slate-200 px-4 py-2.5 rounded-2xl shadow-sm self-start md:self-auto">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Ambang Batas Margin</span>
+                    <span className="text-xs font-semibold text-slate-600">Min. Target Laba</span>
+                  </div>
+                  <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1">
+                    <input
+                      type="number"
+                      min="-100"
+                      max="100"
+                      value={marginThreshold}
+                      onChange={e => setMarginThreshold(Number(e.target.value) || 0)}
+                      className="w-12 text-center font-black font-mono text-slate-800 bg-transparent outline-none text-sm"
+                    />
+                    <span className="font-extrabold text-slate-400 text-sm">%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* GRID COMPARISON */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                
+                {/* 1. MARGIN COMPARISON PANEL (5 cols) */}
+                <div className="lg:col-span-5 bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between space-y-4">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest block">Perbandingan Margin Rata-rata</span>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Current Margin */}
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/50 flex flex-col">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Margin Saat Ini</span>
+                      <span className="text-2xl font-black text-slate-800 font-mono mt-1.5">
+                        {campaignSummaryMetrics.avgCurrentMargin.toFixed(1)}%
+                      </span>
+                      <span className="text-[9px] text-slate-400 mt-1">Sebelum diskon campaign</span>
+                    </div>
+
+                    {/* Campaign Margin */}
+                    <div className={`p-4 rounded-xl border flex flex-col ${
+                      campaignSummaryMetrics.avgCampaignMargin >= marginThreshold
+                        ? 'bg-emerald-50/30 border-emerald-200 text-emerald-950'
+                        : campaignSummaryMetrics.avgCampaignMargin >= 0
+                        ? 'bg-amber-50/30 border-amber-200 text-amber-950'
+                        : 'bg-rose-50/30 border-rose-200 text-rose-950'
+                    }`}>
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Margin Campaign</span>
+                      <span className={`text-2xl font-black font-mono mt-1.5 ${
+                        campaignSummaryMetrics.avgCampaignMargin >= marginThreshold
+                          ? 'text-emerald-700'
+                          : campaignSummaryMetrics.avgCampaignMargin >= 0
+                          ? 'text-amber-700'
+                          : 'text-rose-700'
+                      }`}>
+                        {campaignSummaryMetrics.avgCampaignMargin.toFixed(1)}%
+                      </span>
+                      <span className="text-[9px] text-slate-400 mt-1">Setelah diskon campaign</span>
+                    </div>
+                  </div>
+
+                  {/* Visual Progress Bar Comparing the two */}
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                      <span>Penurunan Profitabilitas</span>
+                      <span className="text-rose-600 font-extrabold">
+                        -{Math.max(0, campaignSummaryMetrics.avgCurrentMargin - campaignSummaryMetrics.avgCampaignMargin).toFixed(1)}%
+                      </span>
+                    </div>
+                    <div className="h-3.5 bg-slate-100 rounded-full overflow-hidden flex">
+                      <div 
+                        style={{ width: `${Math.max(2, Math.min(100, campaignSummaryMetrics.avgCampaignMargin))}%` }}
+                        className={`h-full rounded-l-full transition-all duration-500 ${
+                          campaignSummaryMetrics.avgCampaignMargin >= marginThreshold
+                            ? 'bg-emerald-500'
+                            : campaignSummaryMetrics.avgCampaignMargin >= 0
+                            ? 'bg-amber-500'
+                            : 'bg-rose-500'
+                        }`}
+                      />
+                      <div 
+                        style={{ width: `${Math.max(0, Math.min(100 - campaignSummaryMetrics.avgCampaignMargin, campaignSummaryMetrics.avgCurrentMargin - campaignSummaryMetrics.avgCampaignMargin))}%` }}
+                        className="h-full bg-rose-200 transition-all duration-500"
+                      />
+                    </div>
+                    <div className="flex justify-between text-[9px] text-slate-400">
+                      <span>Margin Campaign ({campaignSummaryMetrics.avgCampaignMargin.toFixed(1)}%)</span>
+                      <span>Margin Saat Ini ({campaignSummaryMetrics.avgCurrentMargin.toFixed(1)}%)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. POTENTIAL LOSS SUMMARY PANEL (7 cols) */}
+                <div className="lg:col-span-7 bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between gap-4">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-widest block">Analisa Risiko Kerugian & Shortfall</span>
+                    <span className="text-[10px] font-extrabold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-100 animate-pulse">
+                      Target: &ge;{marginThreshold}%
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Potential Loss Box */}
+                    <div className="border border-slate-100 bg-slate-50/50 p-4 rounded-xl flex flex-col justify-between space-y-3">
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Produk di Bawah Batas ({marginThreshold}%)</span>
+                        <div className="flex items-baseline gap-1 mt-1">
+                          <span className="text-xl font-black text-slate-800 font-mono">
+                            {campaignSummaryMetrics.productsBelowThreshold}
+                          </span>
+                          <span className="text-[10px] text-slate-400">
+                            / {campaignSummaryMetrics.totalSelectedMatched} SKU
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="pt-2 border-t border-slate-200/50 mt-1">
+                        <span className="text-[10px] font-semibold text-rose-700 block">Rugi Riil (Margin &lt; 0%):</span>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-lg font-bold text-rose-700 font-mono">{campaignSummaryMetrics.productsActualLoss}</span>
+                          <span className="text-[9px] text-slate-400">SKU</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Total Value Loss Box */}
+                    <div className="border border-rose-100 bg-rose-50/10 p-4 rounded-xl flex flex-col justify-between space-y-3">
+                      <div>
+                        <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider block">Total Potensi Kerugian</span>
+                        <div className="mt-1">
+                          <span className="text-xl font-black text-rose-600 font-mono">
+                            Rp {Math.round(campaignSummaryMetrics.totalPotentialLossSales).toLocaleString('id-ID')}
+                          </span>
+                          <span className="text-[9px] text-slate-400 block mt-0.5">
+                            Berdasarkan histori penjualan ({Math.round(campaignSummaryMetrics.totalPotentialLossUnit).toLocaleString('id-ID')}/unit)
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-rose-200/30">
+                        <span className="text-[10px] font-semibold text-amber-700 block">Shortfall Target Laba ({marginThreshold}%):</span>
+                        <span className="text-sm font-bold text-amber-700 font-mono">
+                          Rp {Math.round(campaignSummaryMetrics.totalShortfallSales).toLocaleString('id-ID')}
+                        </span>
+                        <span className="text-[9px] text-slate-400 block">
+                          Berdasarkan histori penjualan
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-[10px] text-slate-500 bg-slate-50 p-2.5 rounded-lg border border-slate-100 flex items-start gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
+                    <span>
+                      <strong>Potensi Kerugian</strong> menunjukkan total kerugian aktual uang riil (harga jual &lt; HPP + biaya admin) dikali angka penjualan. <strong>Shortfall Target Laba</strong> menunjukkan kekurangan profit untuk menyentuh target margin minimal {marginThreshold}%.
+                    </span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -1685,25 +2124,13 @@ export default function ShopeeTab({
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-                <FileSpreadsheet className="w-4 h-4 text-amber-600" /> Simulasi & Verifikasi Campaign Shopee
+                <FileSpreadsheet className="w-4 h-4 text-amber-600" /> Simulasi & Verifikasi Campaign Shopee ({shopName === 'GomallShopee' ? 'GoMall' : 'Balist'})
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Unggah file XLSX Campaign Shopee untuk memverifikasi apakah harga diskon/rekomendasi Shopee tidak rugi terhadap HPP sistem.
+                Sinkronkan dengan Google Sheets atau unggah file campaign (.xlsx / .csv) untuk memverifikasi margin produk.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              {/* UPLOAD FILE */}
-              <label className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold px-4 py-2.5 rounded-xl cursor-pointer shadow-sm transition-colors select-none">
-                <Upload className="w-3.5 h-3.5 text-indigo-600" />
-                <span>{campaignFileName ? 'Ganti File Campaign' : 'Unggah File Campaign'}</span>
-                <input
-                  type="file"
-                  accept=".xlsx, .xls"
-                  onChange={handleUploadCampaignFile}
-                  className="hidden"
-                />
-              </label>
-
               {campaignItems.length > 0 && (
                 <>
                   {/* AUTO-FIX SELECTION */}
@@ -1726,24 +2153,161 @@ export default function ShopeeTab({
                     </button>
                   </div>
 
+                  {/* CAMPAIGN DOWNLOAD MODE SELECTOR */}
+                  <div className="flex items-center gap-2 bg-white border border-slate-200 p-1.5 px-3 rounded-xl shadow-sm text-xs">
+                    <span className="font-semibold text-slate-500">Metode Unduh:</span>
+                    <select
+                      value={campaignDownloadMode}
+                      onChange={e => setCampaignDownloadMode(e.target.value as 'all' | 'selected')}
+                      className="bg-slate-50 border border-slate-200 rounded font-bold text-slate-700 py-0.5 px-1 bg-transparent outline-none cursor-pointer focus:ring-1 focus:ring-indigo-500"
+                    >
+                      <option value="all">Semua Baris (Saran Shopee)</option>
+                      <option value="selected">Hanya Baris Dicentang</option>
+                    </select>
+                  </div>
+
                   <button
-                    onClick={handleDownloadFixedCampaignXLSX}
+                    onClick={() => handleDownloadFixedCampaignFile('xlsx')}
                     className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase tracking-wider px-5 py-3 rounded-xl shadow-sm transition-all duration-150 active:scale-95"
                   >
-                    <Download className="w-4 h-4" />
+                    <FileSpreadsheet className="w-4 h-4" />
                     Unduh XLSX Hasil Perbaikan
+                  </button>
+
+                  <button
+                    onClick={() => handleDownloadFixedCampaignFile('csv')}
+                    className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold uppercase tracking-wider px-5 py-3 rounded-xl shadow-sm transition-all duration-150 active:scale-95"
+                  >
+                    <Download className="w-4 h-4" />
+                    Unduh CSV Hasil Perbaikan
                   </button>
                 </>
               )}
             </div>
           </div>
 
+          {/* CAMPAIGN SYNCHRONIZATION STATUS & URL */}
+          <div className="bg-white border border-amber-200/60 rounded-xl p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 text-xs shadow-sm">
+            <div className="flex-grow space-y-2">
+              <div className="flex items-center gap-2.5">
+                <div className="p-1.5 rounded-lg bg-amber-50 text-amber-600 flex-shrink-0">
+                  <Database className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold text-slate-800 flex flex-wrap items-center gap-1.5">
+                    <span>Sinkronisasi Sheet CAMPAIGN</span>
+                    {isCampaignLoading && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-amber-600 font-bold bg-amber-50 px-1.5 py-0.5 rounded-full">
+                        <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Memuat...
+                      </span>
+                    )}
+                    {!isCampaignLoading && !campaignError && campaignItems.length > 0 && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 font-bold bg-emerald-50 px-1.5 py-0.5 rounded-full">
+                        <CheckCircle2 className="w-2.5 h-2.5" /> Terhubung
+                      </span>
+                    )}
+                    {campaignError && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-rose-600 font-bold bg-rose-50 px-1.5 py-0.5 rounded-full">
+                        <AlertTriangle className="w-2.5 h-2.5" /> Gagal
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-0.5 leading-relaxed">
+                    {isCampaignLoading 
+                      ? 'Sedang mengunduh dan menganalisa data campaign terbaru...'
+                      : campaignError
+                        ? `Error: ${campaignError}`
+                        : campaignItems.length > 0
+                          ? `Berhasil memuat ${campaignItems.length} produk campaign dari sheet.`
+                          : 'Belum sinkron atau silakan paste link sheet CSV di bawah.'
+                    }
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-2 w-full mt-1">
+                <span className="font-semibold text-slate-500 whitespace-nowrap text-[10px]">URL Google Sheets CSV:</span>
+                <input
+                  type="text"
+                  value={customCampaignUrl}
+                  onChange={(e) => {
+                    setCustomCampaignUrl(e.target.value);
+                    localStorage.setItem(`${cacheKeyPrefix}_campaign_sheet_url`, e.target.value);
+                  }}
+                  placeholder="Paste URL publikasi CSV Google Sheets disini..."
+                  className="w-full text-[10px] font-mono p-1 px-2 border border-slate-200 rounded bg-slate-50 outline-none focus:bg-white focus:border-amber-400 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row md:flex-col lg:flex-row items-stretch gap-2 justify-end self-stretch md:self-auto">
+              <button
+                type="button"
+                onClick={() => fetchCampaignFromUrl(customCampaignUrl)}
+                disabled={isCampaignLoading || !customCampaignUrl}
+                className="text-[10px] uppercase font-bold text-amber-700 hover:text-white bg-amber-50 hover:bg-amber-600 border border-amber-200 hover:border-amber-600 rounded-lg px-4 py-2 transition-all duration-150 active:scale-95 disabled:opacity-50 flex items-center gap-1.5 whitespace-nowrap justify-center"
+              >
+                <RefreshCw className={`w-3 h-3 ${isCampaignLoading ? 'animate-spin' : ''}`} />
+                Sinkronkan dari URL
+              </button>
+
+              {/* MANUAL UPLOAD AS FALLBACK */}
+              <label className="flex items-center justify-center gap-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-[10px] uppercase font-bold px-4 py-2 rounded-lg cursor-pointer transition-colors shadow-sm select-none whitespace-nowrap">
+                <Upload className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Unggah Manual (CSV/XLSX)</span>
+                <input
+                  type="file"
+                  accept=".xlsx, .xls, .csv"
+                  onChange={handleUploadCampaignFile}
+                  className="hidden"
+                />
+              </label>
+            </div>
+          </div>
+
           {campaignFileName && (
-            <div className="text-xs flex items-center gap-2 bg-slate-100 p-2.5 px-3.5 rounded-xl border border-slate-200/50">
-              <span className="font-bold text-slate-600">File Terunggah:</span>
-              <span className="font-mono text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">{campaignFileName}</span>
-              <span className="text-slate-400">|</span>
-              <span className="text-slate-500 font-medium">Terbaca <strong className="text-slate-700">{campaignItems.length}</strong> baris produk campaign.</span>
+            <div className="text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-100 p-3 px-4 rounded-xl border border-slate-200/50">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="font-bold text-slate-600">Sumber Data:</span>
+                <span className="font-mono text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100">{campaignFileName}</span>
+                <span className="text-slate-300">|</span>
+                <span className="text-slate-600 font-medium">
+                  Terbaca <strong className="text-slate-800">{campaignItems.length}</strong> produk.
+                </span>
+                <span className="text-slate-300">|</span>
+                <span className="text-indigo-800 font-bold bg-indigo-50/80 border border-indigo-200 px-2.5 py-0.5 rounded-lg">
+                  Terpilih untuk unduh: <strong className="text-indigo-900">{getSelectedCampaignCount()}</strong> / <strong className="text-indigo-900">{campaignItems.length}</strong>
+                </span>
+              </div>
+              
+              <div className="flex items-center gap-1.5 self-start sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next: Record<string, boolean> = {};
+                    campaignItems.forEach(item => {
+                      next[`${item.productId}-${item.variationId}`] = true;
+                    });
+                    setSelectedCampaignKeys(next);
+                  }}
+                  className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 px-2 py-1.5 rounded-lg font-bold text-[10px] uppercase shadow-sm active:scale-95 transition-all"
+                >
+                  Pilih Semua
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next: Record<string, boolean> = {};
+                    campaignItems.forEach(item => {
+                      next[`${item.productId}-${item.variationId}`] = false;
+                    });
+                    setSelectedCampaignKeys(next);
+                  }}
+                  className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 px-2 py-1.5 rounded-lg font-bold text-[10px] uppercase shadow-sm active:scale-95 transition-all"
+                >
+                  Kosongkan Pilihan
+                </button>
+              </div>
             </div>
           )}
 
@@ -1765,7 +2329,7 @@ export default function ShopeeTab({
               <li>Unggah file tersebut ke sini untuk membandingkan nominal <span className="font-bold">Harga Diskon</span> atau <span className="font-bold">Rekomendasi Harga Diskon</span> dari Shopee dengan HPP sistem.</li>
               <li>Perhitungan keuntungan menyertakan potongan biaya potongan Marketplace &amp; Campaign ({((Number(fees?.adminFee) || 0) + (Number(fees?.layananXtra) || 0) + (Number(fees?.insurance) || 0) + (Number(fees?.komisiAMS) || 0) + (Number(fees?.campaignFee) || 0)).toFixed(1)}% + {formatIDR((Number(fees?.marketplaceProcessingFee) || 0) + (Number(fees?.jubelioProcessingFee) || 0) + (Number(fees?.packingFee) || 0))}).</li>
               <li>Gunakan tombol <span className="font-bold">"Perbaiki Harga Rugi"</span> untuk menaikkan harga diskon secara otomatis ke target margin aman (misal 20% margin atau sesuai input) agar tidak boncos.</li>
-              <li>Terakhir, klik <span className="font-bold">"Unduh XLSX Hasil Perbaikan"</span> untuk mengunduh file Excel yang telah diperbaiki yang bisa langsung diunggah kembali ke Shopee Seller Centre.</li>
+              <li>Terakhir, klik tombol <span className="font-bold">"Unduh XLSX Hasil Perbaikan"</span> atau <span className="font-bold">"Unduh CSV Hasil Perbaikan"</span> untuk menyimpan file yang telah diperbaiki yang bisa langsung diunggah kembali ke Shopee Seller Centre.</li>
             </ul>
           </div>
         </div>
@@ -1942,6 +2506,27 @@ export default function ShopeeTab({
             <thead className="bg-slate-50 border-b border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-500">
               {shopeeTabMode === 'campaign' ? (
                 <tr>
+                  <th className="p-4 w-20 text-center">
+                    <div className="flex flex-col items-center gap-1 justify-center">
+                      <input
+                        type="checkbox"
+                        id="select-all-campaign"
+                        checked={filteredCampaignItems.length > 0 && filteredCampaignItems.every(item => selectedCampaignKeys[`${item.productId}-${item.variationId}`] !== false)}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          const next = { ...selectedCampaignKeys };
+                          filteredCampaignItems.forEach(item => {
+                            next[`${item.productId}-${item.variationId}`] = checked;
+                          });
+                          setSelectedCampaignKeys(next);
+                        }}
+                        className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                      />
+                      <label htmlFor="select-all-campaign" className="text-[8px] font-extrabold text-slate-400 cursor-pointer uppercase select-none tracking-wider block leading-none whitespace-nowrap">
+                        Pilih Semua
+                      </label>
+                    </div>
+                  </th>
                   <th className="p-4 min-w-[200px] max-w-[240px]">Produk Campaign</th>
                   <th className="p-4">Kode ID Shopee (Prod / Varian)</th>
                   <th className="p-4 text-right bg-indigo-50/30">Harga Awal & Saat Ini</th>
@@ -1972,7 +2557,7 @@ export default function ShopeeTab({
             <tbody className="divide-y divide-slate-100">
               {isLoading ? (
                 <tr>
-                  <td colSpan={6} className="p-12 text-center text-slate-500">
+                  <td colSpan={shopeeTabMode === 'campaign' ? 7 : 6} className="p-12 text-center text-slate-500">
                     <div className="flex flex-col items-center justify-center gap-3">
                       <RefreshCw className="w-6 h-6 animate-spin text-indigo-600" />
                       <span className="text-xs font-semibold">Mengunduh & menganalisa data {shopName}...</span>
@@ -1982,7 +2567,7 @@ export default function ShopeeTab({
               ) : shopeeTabMode === 'campaign' ? (
                 campaignItems.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-12 text-center text-slate-400 text-sm font-semibold">
+                    <td colSpan={7} className="p-12 text-center text-slate-400 text-sm font-semibold">
                       <div className="flex flex-col items-center gap-2 py-4">
                         <FileSpreadsheet className="w-8 h-8 text-indigo-500 animate-pulse" />
                         <span>Belum ada data campaign. Silakan unggah file campaign XLSX terlebih dahulu.</span>
@@ -1991,7 +2576,7 @@ export default function ShopeeTab({
                   </tr>
                 ) : filteredCampaignItems.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-12 text-center text-slate-400 text-sm font-semibold">
+                    <td colSpan={7} className="p-12 text-center text-slate-400 text-sm font-semibold">
                       Tidak ditemukan data produk campaign yang cocok dengan kriteria filter.
                     </td>
                   </tr>
@@ -1999,9 +2584,28 @@ export default function ShopeeTab({
                   filteredCampaignItems.slice(0, displayLimit).map((item, idx) => {
                     const hasMatch = !!item.matchedProduct;
                     const matchingSku = item.matchedSku;
+                    const key = `${item.productId}-${item.variationId}`;
+                    const isSelected = selectedCampaignKeys[key] !== false;
 
                     return (
-                      <tr key={`${item.productId}-${item.variationId}-${idx}`} className="hover:bg-slate-50/50 transition-colors">
+                      <tr 
+                        key={`${item.productId}-${item.variationId}-${idx}`} 
+                        className={`hover:bg-slate-50/50 transition-all ${isSelected ? '' : 'opacity-65 bg-slate-50/30'}`}
+                      >
+                        {/* SELECT CHECKBOX */}
+                        <td className="p-4 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => {
+                              setSelectedCampaignKeys(prev => ({
+                                ...prev,
+                                [key]: e.target.checked
+                              }));
+                            }}
+                            className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                          />
+                        </td>
                         {/* PRODUCT NAME & IDS */}
                         <td className="p-4 max-w-[240px]">
                           <div className="font-bold text-xs text-slate-800 line-clamp-2 leading-relaxed whitespace-normal" title={item.productName}>

@@ -2615,6 +2615,7 @@ export default function App() {
             rounding={rounding}
             useSmartMargin={useSmartMargin}
             getSmartMarginForSku={getSmartMarginForSku}
+            campaignSheetUrl="https://docs.google.com/spreadsheets/d/e/2PACX-1vQYvBsVpsVwVG0x6GLMZXGnpneOkSC9NWo1ptPoqA5UWIbw12Tdk5YBVmjMBIkgetjktVK_hqKRNvK9/pub?gid=295919763&single=true&output=csv"
           />
         )}
 
@@ -2632,6 +2633,7 @@ export default function App() {
             sheetUrl="https://docs.google.com/spreadsheets/d/e/2PACX-1vQUJWBw2EXirlxov14JNpI1h3ulExBcMQxQ5orpGZmpW7cMqUqMkU9E6OxJ4CBLd4ZvAW8tBmhmEEF6/pub?gid=1555986622&single=true&output=csv"
             cacheKeyPrefix="gomall_shopee"
             fileNamePrefix="GomallShopee_Update_Harga"
+            campaignSheetUrl="https://docs.google.com/spreadsheets/d/e/2PACX-1vQYvBsVpsVwVG0x6GLMZXGnpneOkSC9NWo1ptPoqA5UWIbw12Tdk5YBVmjMBIkgetjktVK_hqKRNvK9/pub?gid=295919763&single=true&output=csv"
           />
         )}
 
