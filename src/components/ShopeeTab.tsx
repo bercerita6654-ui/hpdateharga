@@ -76,6 +76,8 @@ interface ShopeeCampaignItem {
   isNetProfitCurrent?: boolean;
   netMarginCurrent?: number;
   totalFeesCurrent?: number;
+  discountPercent?: number;
+  isDiscountEligible?: boolean;
 }
 
 interface ShopeeTabProps {
@@ -933,7 +935,11 @@ export default function ShopeeTab({
     const initialSelected: Record<string, boolean> = {};
     parsedCampaignItems.forEach(item => {
       const key = `${item.productId}-${item.variationId}`;
-      initialSelected[key] = true;
+      const discountBase = item.originalPrice > 0 ? item.originalPrice : item.currentPrice;
+      const discountPercent = discountBase > 0 && item.campaignPrice > 0
+        ? ((discountBase - item.campaignPrice) / discountBase) * 100
+        : 0;
+      initialSelected[key] = discountPercent <= 10;
     });
     setSelectedCampaignKeys(initialSelected);
 
@@ -1107,17 +1113,27 @@ export default function ShopeeTab({
 
     const checkedCount = campaignItems.filter(item => {
       const key = `${item.productId}-${item.variationId}`;
-      return selectedCampaignKeys[key] !== false;
+      const discountBase = item.originalPrice > 0 ? item.originalPrice : item.currentPrice;
+      const discountPercent = discountBase > 0 && item.campaignPrice > 0
+        ? ((discountBase - item.campaignPrice) / discountBase) * 100
+        : 0;
+      const isEligible = discountPercent <= 10;
+      return isEligible && selectedCampaignKeys[key] !== false;
     }).length;
 
     if (checkedCount === 0) {
-      alert('Silakan pilih minimal satu produk campaign yang dicentang untuk diunduh.');
+      alert('Silakan pilih minimal satu produk campaign yang dicentang (dengan diskon <= 10%) untuk diunduh.');
       return;
     }
 
     campaignItems.forEach((item) => {
       const key = `${item.productId}-${item.variationId}`;
-      const isSelected = selectedCampaignKeys[key] !== false;
+      const discountBase = item.originalPrice > 0 ? item.originalPrice : item.currentPrice;
+      const discountPercent = discountBase > 0 && item.campaignPrice > 0
+        ? ((discountBase - item.campaignPrice) / discountBase) * 100
+        : 0;
+      const isEligible = discountPercent <= 10;
+      const isSelected = isEligible && selectedCampaignKeys[key] !== false;
 
       if (isSelected) {
         const rowCopy = [...item.originalRow];
@@ -1438,6 +1454,12 @@ export default function ShopeeTab({
         }
       }
 
+      const discountBase = item.originalPrice > 0 ? item.originalPrice : item.currentPrice;
+      const discountPercent = discountBase > 0 && item.campaignPrice > 0
+        ? ((discountBase - item.campaignPrice) / discountBase) * 100
+        : 0;
+      const isDiscountEligible = discountPercent <= 10;
+
       return {
         ...item,
         matchedProduct,
@@ -1456,7 +1478,9 @@ export default function ShopeeTab({
         netProfitCurrent,
         isNetProfitCurrent,
         netMarginCurrent,
-        totalFeesCurrent
+        totalFeesCurrent,
+        discountPercent,
+        isDiscountEligible
       };
     });
   }, [campaignItems, shopeeItems, systemProductMap, fees]);
@@ -1471,10 +1495,14 @@ export default function ShopeeTab({
     let netLossRekomendasiCount = 0;
     let maxStockCount = 0;
     let netProfitDiskonAndMaxStockCount = 0;
+    let discountExceededCount = 0;
 
     analyzedCampaignItems.forEach(item => {
       if (item.stock >= 50) {
         maxStockCount++;
+      }
+      if ((item.discountPercent ?? 0) > 10) {
+        discountExceededCount++;
       }
       if (item.matchedProduct) {
         matched++;
@@ -1505,7 +1533,8 @@ export default function ShopeeTab({
       netProfitRekomendasiCount,
       netLossRekomendasiCount,
       maxStockCount,
-      netProfitDiskonAndMaxStockCount
+      netProfitDiskonAndMaxStockCount,
+      discountExceededCount
     };
   }, [analyzedCampaignItems]);
 
@@ -1759,6 +1788,32 @@ export default function ShopeeTab({
               <span className="text-2xl font-black text-rose-700 font-mono mt-2">{campaignStats.netLossRekomendasiCount}</span>
             </div>
           </div>
+          
+          {campaignStats.discountExceededCount > 0 && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm animate-in slide-in-from-top-2 duration-200">
+              <div className="flex items-start sm:items-center gap-2.5">
+                <AlertTriangle className="w-4.5 h-4.5 text-amber-600 flex-shrink-0 mt-0.5 sm:mt-0" />
+                <div>
+                  Terdapat <strong className="font-extrabold">{campaignStats.discountExceededCount}</strong> SKU dengan diskon melebihi <strong className="font-extrabold">10%</strong>. SKU ini secara otomatis <strong className="font-bold">tidak dicentang / tidak diikutkan</strong> dalam campaign demi menjaga profitabilitas.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = { ...selectedCampaignKeys };
+                  analyzedCampaignItems.forEach(item => {
+                    if ((item.discountPercent ?? 0) > 10) {
+                      next[`${item.productId}-${item.variationId}`] = false;
+                    }
+                  });
+                  setSelectedCampaignKeys(next);
+                }}
+                className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-3 py-1.5 rounded-lg transition-all active:scale-95 text-[10px] uppercase tracking-wider whitespace-nowrap cursor-pointer"
+              >
+                Keluarkan Semua (&gt;10%)
+              </button>
+            </div>
+          )}
 
           {/* Card Ringkasan Visual Analisa Margin Campaign */}
           {campaignItems.length > 0 && (
@@ -2383,30 +2438,34 @@ export default function ShopeeTab({
                   type="button"
                   onClick={() => {
                     const next: Record<string, boolean> = {};
-                    campaignItems.forEach(item => {
-                      next[`${item.productId}-${item.variationId}`] = true;
+                    analyzedCampaignItems.forEach(item => {
+                      const isEligible = (item.discountPercent ?? 0) <= 10;
+                      next[`${item.productId}-${item.variationId}`] = isEligible;
                     });
                     setSelectedCampaignKeys(next);
                   }}
-                  className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 px-2 py-1.5 rounded-lg font-bold text-[10px] uppercase shadow-sm active:scale-95 transition-all"
+                  className="bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 px-2 py-1.5 rounded-lg font-bold text-[10px] uppercase shadow-sm active:scale-95 transition-all cursor-pointer"
                 >
-                  Pilih Semua
+                  Pilih Semua (Diskon &lt;= 10%)
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     const next = { ...selectedCampaignKeys };
                     analyzedCampaignItems.forEach(item => {
-                      if (item.stock >= 50) {
+                      const isEligible = (item.discountPercent ?? 0) <= 10;
+                      if (item.stock >= 50 && isEligible) {
                         next[`${item.productId}-${item.variationId}`] = true;
+                      } else if (!isEligible) {
+                        next[`${item.productId}-${item.variationId}`] = false;
                       }
                     });
                     setSelectedCampaignKeys(next);
                   }}
-                  className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 px-2 py-1.5 rounded-lg font-bold text-[10px] uppercase shadow-sm active:scale-95 transition-all flex items-center gap-1"
+                  className="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 px-2 py-1.5 rounded-lg font-bold text-[10px] uppercase shadow-sm active:scale-95 transition-all flex items-center gap-1 cursor-pointer"
                 >
                   <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
-                  Pilih Stok &gt;= 50
+                  Stok &gt;= 50 &amp; Diskon &lt;= 10%
                 </button>
                 <button
                   type="button"
@@ -2637,15 +2696,18 @@ export default function ShopeeTab({
               onClick={() => {
                 const next = { ...selectedCampaignKeys };
                 analyzedCampaignItems.forEach(item => {
-                  if (item.matchedProduct && item.isNetProfitDiskon && item.stock >= 50) {
+                  const isEligible = (item.discountPercent ?? 0) <= 10;
+                  if (item.matchedProduct && item.isNetProfitDiskon && item.stock >= 50 && isEligible) {
                     next[`${item.productId}-${item.variationId}`] = true;
+                  } else if (!isEligible) {
+                    next[`${item.productId}-${item.variationId}`] = false;
                   }
                 });
                 setSelectedCampaignKeys(next);
               }}
               className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3.5 py-2 rounded-xl shadow-sm hover:shadow-emerald-500/10 active:scale-95 transition-all flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
             >
-              <CheckSquare className="w-4 h-4" /> Centang Stok &gt;= 50 (Untung)
+              <CheckSquare className="w-4 h-4" /> Centang Stok &gt;= 50 (Untung &amp; Diskon &lt;= 10%)
             </button>
           </div>
         )}
@@ -2661,12 +2723,23 @@ export default function ShopeeTab({
                       <input
                         type="checkbox"
                         id="select-all-campaign"
-                        checked={filteredCampaignItems.length > 0 && filteredCampaignItems.every(item => selectedCampaignKeys[`${item.productId}-${item.variationId}`] !== false)}
+                        checked={
+                          filteredCampaignItems.length > 0 && 
+                          filteredCampaignItems.every(item => {
+                            if ((item.discountPercent ?? 0) > 10) return true; // Ignore ineligible in checked status
+                            return selectedCampaignKeys[`${item.productId}-${item.variationId}`] !== false;
+                          })
+                        }
                         onChange={(e) => {
                           const checked = e.target.checked;
                           const next = { ...selectedCampaignKeys };
                           filteredCampaignItems.forEach(item => {
-                            next[`${item.productId}-${item.variationId}`] = checked;
+                            const isEligible = (item.discountPercent ?? 0) <= 10;
+                            if (isEligible) {
+                              next[`${item.productId}-${item.variationId}`] = checked;
+                            } else {
+                              next[`${item.productId}-${item.variationId}`] = false;
+                            }
                           });
                           setSelectedCampaignKeys(next);
                         }}
@@ -2777,7 +2850,8 @@ export default function ShopeeTab({
                     const hasMatch = !!item.matchedProduct;
                     const matchingSku = item.matchedSku;
                     const key = `${item.productId}-${item.variationId}`;
-                    const isSelected = selectedCampaignKeys[key] !== false;
+                    const isEligible = (item.discountPercent ?? 0) <= 10;
+                    const isSelected = isEligible && selectedCampaignKeys[key] !== false;
 
                     return (
                       <tr 
@@ -2786,17 +2860,25 @@ export default function ShopeeTab({
                       >
                         {/* SELECT CHECKBOX */}
                         <td className="p-4 text-center">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={(e) => {
-                              setSelectedCampaignKeys(prev => ({
-                                ...prev,
-                                [key]: e.target.checked
-                              }));
-                            }}
-                            className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
-                          />
+                          {isEligible ? (
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                setSelectedCampaignKeys(prev => ({
+                                  ...prev,
+                                  [key]: e.target.checked
+                                }));
+                              }}
+                              className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 cursor-pointer"
+                            />
+                          ) : (
+                            <div className="flex flex-col items-center justify-center gap-1" title={`Ditolak: Diskon saat ini ${item.discountPercent?.toFixed(1)}%, melebihi batas maksimal 10%`}>
+                              <span className="text-[9px] font-black bg-rose-50 text-rose-600 border border-rose-200/80 rounded px-1.5 py-0.5 uppercase tracking-wider block scale-90 whitespace-nowrap">
+                                Diskon &gt; 10%
+                              </span>
+                            </div>
+                          )}
                         </td>
                         {/* PRODUCT NAME & IDS */}
                         <td className="p-4 max-w-[240px]">
@@ -2862,6 +2944,11 @@ export default function ShopeeTab({
                             {item.campaignPrice > 0 ? (
                               <>
                                 <span className="font-mono font-black text-xs text-slate-800">{formatIDR(item.campaignPrice)}</span>
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border mt-1 ${
+                                  isEligible ? 'bg-indigo-50 text-indigo-700 border-indigo-100/60' : 'bg-rose-50 text-rose-600 border-rose-200/60 font-extrabold'
+                                }`}>
+                                  Diskon: {item.discountPercent?.toFixed(1)}%
+                                </span>
                                 {hasMatch ? (
                                   <>
                                     <div className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-0.5 mt-0.5 ${
