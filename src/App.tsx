@@ -774,11 +774,23 @@ export default function App() {
           if (linesHpp.length > 1) {
             const hppMap: Record<string, number> = {};
             const stockMap: Record<string, number> = {};
+            const eceranMap: Record<string, number> = {};
+            const grosirMap: Record<string, number> = {};
+            const partaiMap: Record<string, number> = {};
             const headerHpp = parseLineLocal(linesHpp[0]).map(v => v.toLowerCase().trim());
 
             let hppIdx = headerHpp.findIndex(h => h === 'hpp akhir' || h.includes('hpp akhir'));
-            if (hppIdx === -1) hppIdx = 7;
+            if (hppIdx === -1) hppIdx = 7; // Kolom 8 (index 7)
             
+            let ecerIdx = headerHpp.findIndex(h => h.includes('ecer') || h.includes('retail'));
+            if (ecerIdx === -1) ecerIdx = 10; // Kolom 11 (index 10)
+
+            let grosirIdx = headerHpp.findIndex(h => h.includes('grosir'));
+            if (grosirIdx === -1) grosirIdx = 11; // Kolom 12 (index 11)
+
+            let partaiIdx = headerHpp.findIndex(h => h.includes('partai'));
+            if (partaiIdx === -1) partaiIdx = 12; // Kolom 13 (index 12)
+
             let qtyIdx = headerHpp.findIndex(h => h === 'stok' || h.includes('stok') || h.includes('qty') || h.includes('stock') || h.includes('quantity'));
             if (qtyIdx === -1) qtyIdx = 12;
             
@@ -796,10 +808,16 @@ export default function App() {
               if (!l.trim()) return;
               const r = parseLineLocal(l);
               const skuStr = r[skuIdx] ? r[skuIdx].trim() : '';
-              const hppVal = numHelper(r[hppIdx]);
+              const hppVal = r.length > hppIdx ? numHelper(r[hppIdx]) : 0;
+              const ecerVal = r.length > ecerIdx ? numHelper(r[ecerIdx]) : 0;
+              const grosirVal = r.length > grosirIdx ? numHelper(r[grosirIdx]) : 0;
+              const partaiVal = r.length > partaiIdx ? numHelper(r[partaiIdx]) : 0;
               const qtyVal = r.length > qtyIdx ? parseStockValue(r[qtyIdx]) : 0;
               if (skuStr) {
                 hppMap[skuStr] = hppVal;
+                eceranMap[skuStr] = ecerVal;
+                grosirMap[skuStr] = grosirVal;
+                partaiMap[skuStr] = partaiVal;
                 stockMap[skuStr] = qtyVal;
               }
             });
@@ -807,7 +825,10 @@ export default function App() {
               const cleanedSku = p.sku.trim();
               return {
                 ...p,
-                hpp: hppMap[cleanedSku] || p.hpp || 0,
+                hpp: hppMap[cleanedSku] !== undefined ? hppMap[cleanedSku] : p.hpp,
+                eceran: eceranMap[cleanedSku] !== undefined ? eceranMap[cleanedSku] : p.eceran,
+                grosir: grosirMap[cleanedSku] !== undefined ? grosirMap[cleanedSku] : p.grosir,
+                partai: partaiMap[cleanedSku] !== undefined ? partaiMap[cleanedSku] : p.partai,
                 stock: stockMap[cleanedSku] !== undefined ? stockMap[cleanedSku] : 0
               };
             });
