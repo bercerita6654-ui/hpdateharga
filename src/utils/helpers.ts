@@ -24,6 +24,14 @@ export const parseInput = (val: string): number | '' => {
   return parseInt(strVal, 10);
 };
 
+export const sanitizeSku = (val: any): string => {
+  if (val === null || val === undefined) return '';
+  return String(val)
+    .replace(/[\u200B-\u200D\uFEFF]/g, '') // remove zero-width spaces, BOM, etc.
+    .replace(/[\r\n\t]+/g, '')
+    .trim();
+};
+
 export const formatDateTime = (dateString: string | null | undefined): string => {
   if (!dateString) return '-';
   try {

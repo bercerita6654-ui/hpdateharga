@@ -31,7 +31,7 @@ import { getAuth, signInAnonymously } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 import { Product, CartItem, CompetitorCartItem, Submission, Fees } from './types';
-import { formatIDR, formatInput, parseInput } from './utils/helpers';
+import { formatIDR, formatInput, parseInput, sanitizeSku } from './utils/helpers';
 
 import BasicCalculator from './components/BasicCalculator';
 import ServerQuickCalculator from './components/ServerQuickCalculator';
@@ -163,11 +163,11 @@ export default function App() {
     compBLink: ''
   });
 
-  const [rounding, setRounding] = useState('none');
-  const [massMargin, setMassMargin] = useState('');
-  const [massFee, setMassFee] = useState('');
-  const [massPack, setMassPack] = useState('');
-  const [massHppRef, setMassHppRef] = useState('');
+  const [rounding, setRounding] = useState('1000');
+  const [massMargin, setMassMargin] = useState('20');
+  const [massFee, setMassFee] = useState('1600');
+  const [massPack, setMassPack] = useState('1000');
+  const [massHppRef, setMassHppRef] = useState('partai');
 
   const [showAddBrandModal, setShowAddBrandModal] = useState(false);
   const [categories, setCategories] = useState<string[]>([]);
@@ -456,8 +456,12 @@ export default function App() {
   const calculateRecommendation = useCallback(
     (marginPercent: number, qty = 1) => {
       const selectedProductData = productList.find(p => p.sku === selectedSku);
-      const safeHpp = selectedProductData && selectedProductData.partai 
-        ? Number(selectedProductData.partai) 
+      const safeHpp = selectedProductData 
+        ? (massHppRef === 'partai' && selectedProductData.partai ? Number(selectedProductData.partai) :
+           massHppRef === 'eceran' && selectedProductData.eceran ? Number(selectedProductData.eceran) :
+           massHppRef === 'grosir' && selectedProductData.grosir ? Number(selectedProductData.grosir) :
+           massHppRef === 'hpp' && selectedProductData.hpp ? Number(selectedProductData.hpp) :
+           (selectedProductData.partai || Number(product.hpp) || 0))
         : (Number(product.hpp) || 0);
       const totalPercentFee =
         (Number(fees.adminFee) || 0) +
@@ -492,14 +496,19 @@ export default function App() {
       fees.marketplaceProcessingFee,
       fees.jubelioProcessingFee,
       fees.packingFee,
-      rounding
+      rounding,
+      massHppRef
     ]
   );
 
   const calculateItemPrices = useCallback(
-    (hpp: number, margin: number, fee: number, packFee: number, customQtyValue: number | null, currentRounding: string, partai?: number) => {
+    (hpp: number, margin: number, fee: number, packFee: number, customQtyValue: number | null, currentRounding: string, partai?: number, eceran?: number, grosir?: number) => {
       const safeHpp = Number(hpp) || 0;
-      const baseCost = partai !== undefined && Number(partai) > 0 ? Number(partai) : safeHpp;
+      const baseCost = massHppRef === 'partai' && partai !== undefined && Number(partai) > 0 ? Number(partai) :
+                       massHppRef === 'eceran' && eceran !== undefined && Number(eceran) > 0 ? Number(eceran) :
+                       massHppRef === 'grosir' && grosir !== undefined && Number(grosir) > 0 ? Number(grosir) :
+                       massHppRef === 'hpp' ? safeHpp :
+                       (partai !== undefined && Number(partai) > 0 ? Number(partai) : safeHpp);
       const totalPercentFee =
         (Number(fees.adminFee) || 0) +
         (Number(fees.layananXtra) || 0) +
@@ -526,17 +535,17 @@ export default function App() {
         priceCustom: customQtyValue ? calc(customQtyValue) : null
       };
     },
-    [fees.adminFee, fees.layananXtra, fees.insurance, fees.komisiAMS, fees.campaignFee]
+    [fees.adminFee, fees.layananXtra, fees.insurance, fees.komisiAMS, fees.campaignFee, massHppRef]
   );
 
   useEffect(() => {
     if (selectedSku) {
-      const autoPrice = calculateRecommendation(10, 1);
+      const autoPrice = calculateRecommendation(Number(massMargin) || 20, 1);
       if (autoPrice > 0) {
         setProduct(prev => ({ ...prev, basePrice: autoPrice }));
       }
     }
-  }, [selectedSku, calculateRecommendation]);
+  }, [selectedSku, calculateRecommendation, massMargin]);
 
   useEffect(() => {
     setCartPage(1);
@@ -776,7 +785,7 @@ export default function App() {
             linesHpp.slice(1).forEach(l => {
               if (!l.trim()) return;
               const r = parseLineLocal(l);
-              const skuStr = r[skuIdx] ? r[skuIdx].trim() : '';
+              const skuStr = sanitizeSku(r[skuIdx]);
               if (!skuStr) return;
               const nameStr = r.length > nameIdx && r[nameIdx] ? r[nameIdx].trim() : 'Produk';
               const unitStr = r.length > unitIdx && r[unitIdx] ? r[unitIdx].trim() : 'pcs';
@@ -824,7 +833,7 @@ export default function App() {
               if (!l.trim()) return;
               const r = parseLineLocal(l);
               if (r.length < 3) return;
-              const skuStr = r[idxProd.sku] ? r[idxProd.sku].trim() : '';
+              const skuStr = sanitizeSku(r[idxProd.sku]);
               if (!skuStr) return;
               const nameStr = r[idxProd.name] || 'Produk';
               const unitStr = r[idxProd.unit] || 'pcs';
@@ -867,7 +876,7 @@ export default function App() {
           const linesCat = textCat.split('\n');
           if (linesCat.length > 1) {
             const headerCat = parseLineLocal(linesCat[0]).map(v => v.toLowerCase().trim());
-            const idxCatSku = headerCat.findIndex(h => h === 'sku' || h.includes('sku') || h.includes('kode'));
+            const idxCatSku = headerCat.findIndex(h => h === 'sku' || h.includes('sku' ) || h.includes('kode'));
             const idxCatType = headerCat.findIndex(h => h === 'type' || h.includes('type') || h.includes('tipe'));
 
             if (idxCatSku !== -1 && idxCatType !== -1) {
@@ -877,7 +886,7 @@ export default function App() {
                 if (!l.trim()) return;
                 const r = parseLineLocal(l);
                 if (r.length > Math.max(idxCatSku, idxCatType)) {
-                  const skuStr = r[idxCatSku];
+                  const skuStr = sanitizeSku(r[idxCatSku]);
                   const typeStr = r[idxCatType];
                   if (skuStr && typeStr) {
                     map[skuStr] = typeStr;
@@ -949,8 +958,13 @@ export default function App() {
 
   const handleSelectProduct = (selectedProd: Product) => {
     setSelectedSku(selectedProd.sku);
+    const baseHpp = massHppRef === 'partai' && selectedProd.partai ? Number(selectedProd.partai) :
+                    massHppRef === 'eceran' && selectedProd.eceran ? Number(selectedProd.eceran) :
+                    massHppRef === 'grosir' && selectedProd.grosir ? Number(selectedProd.grosir) :
+                    massHppRef === 'hpp' && selectedProd.hpp ? Number(selectedProd.hpp) :
+                    (selectedProd.partai || selectedProd.hpp || 0);
     setProduct({
-      hpp: selectedProd.hpp || 0,
+      hpp: baseHpp,
       basePrice: selectedProd.eceran
     });
     setShowProductList(false);
@@ -960,16 +974,16 @@ export default function App() {
   const addToCart = () => {
     if (!selectedSku) return;
 
-    const margin = useSmartMargin ? getSmartMarginForSku(selectedSku) : 10;
-    const currentProcFee = (Number(fees.marketplaceProcessingFee) || 0) + (Number(fees.jubelioProcessingFee) || 0);
-    const currentPackFee = Number(fees.packingFee) || 0;
+    const margin = useSmartMargin ? getSmartMarginForSku(selectedSku) : (massMargin ? Number(massMargin) : 20);
+    const currentProcFee = massFee !== '' ? Number(massFee) : ((Number(fees.marketplaceProcessingFee) || 0) + (Number(fees.jubelioProcessingFee) || 0));
+    const currentPackFee = massPack !== '' ? Number(massPack) : Number(fees.packingFee) || 0;
 
     let finalCustomQty = null;
     if (showCustomQty && customQty > 1) {
       finalCustomQty = customQty;
     }
 
-    const prices = calculateItemPrices(product.hpp, margin, currentProcFee, currentPackFee, finalCustomQty, rounding, selectedProductData?.partai);
+    const prices = calculateItemPrices(product.hpp, margin, currentProcFee, currentPackFee, finalCustomQty, rounding, selectedProductData?.partai, selectedProductData?.eceran, selectedProductData?.grosir);
 
     setCart([
       ...cart,
@@ -1001,8 +1015,8 @@ export default function App() {
     if (productsArray.length === 0) return;
 
     const newItems: CartItem[] = [];
-    const currentProcFee = (Number(fees.marketplaceProcessingFee) || 0) + (Number(fees.jubelioProcessingFee) || 0);
-    const currentPackFee = Number(fees.packingFee) || 0;
+    const currentProcFee = massFee !== '' ? Number(massFee) : ((Number(fees.marketplaceProcessingFee) || 0) + (Number(fees.jubelioProcessingFee) || 0));
+    const currentPackFee = massPack !== '' ? Number(massPack) : Number(fees.packingFee) || 0;
 
     productsArray.forEach((prod, index) => {
       if (!cart.some(c => c.sku === prod.sku)) {
@@ -1011,8 +1025,8 @@ export default function App() {
           finalCustomQty = customQty;
         }
 
-        const margin = useSmartMargin ? getSmartMarginForSku(prod.sku) : 10;
-        const prices = calculateItemPrices(prod.hpp, margin, currentProcFee, currentPackFee, finalCustomQty, rounding, prod.partai);
+        const margin = useSmartMargin ? getSmartMarginForSku(prod.sku) : (massMargin ? Number(massMargin) : 20);
+        const prices = calculateItemPrices(prod.hpp, margin, currentProcFee, currentPackFee, finalCustomQty, rounding, prod.partai, prod.eceran, prod.grosir);
 
         newItems.push({
           id: Date.now() + index,

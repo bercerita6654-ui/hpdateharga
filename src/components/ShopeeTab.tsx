@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Product, Fees } from '../types';
-import { formatIDR } from '../utils/helpers';
+import { formatIDR, sanitizeSku } from '../utils/helpers';
 
 const SHOPEE_BALIST_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQUJWBw2EXirlxov14JNpI1h3ulExBcMQxQ5orpGZmpW7cMqUqMkU9E6OxJ4CBLd4ZvAW8tBmhmEEF6/pub?gid=1378584398&single=true&output=csv';
 
@@ -584,12 +584,12 @@ export default function ShopeeTab({
         continue;
       }
 
-      const productId = r[0].trim();
+      const productId = sanitizeSku(r[0]);
       const productName = r[1] || `Produk ${shopName}`;
-      const variationId = r[2] || '';
+      const variationId = sanitizeSku(r[2]);
       const variationName = r[3] || '';
-      const parentSku = r[4] || '';
-      const variationSku = r[5] || '';
+      const parentSku = sanitizeSku(r[4]);
+      const variationSku = sanitizeSku(r[5]);
       const price = numHelper(r[6]);
       const stock = r.length > 8 ? numHelper(r[8]) : 0;
 
@@ -658,8 +658,8 @@ export default function ShopeeTab({
   };
 
   const getStockFromListMap = (item: ShopeeProduct, map: Record<string, number>): number | undefined => {
-    const vSku = item.variationSku.trim().toLowerCase();
-    const pSku = item.parentSku.trim().toLowerCase();
+    const vSku = sanitizeSku(item.variationSku).toLowerCase();
+    const pSku = sanitizeSku(item.parentSku).toLowerCase();
 
     // 1. Try to extract 5-digit SKU from variationSku (Col 6)
     const vMatch5 = vSku.match(/\d{5}/);
@@ -748,7 +748,7 @@ export default function ShopeeTab({
         if (!line.trim()) return;
         const r = parseLineLocal(line);
         if (r.length > skuIdx) {
-          const sku = r[skuIdx].trim().toLowerCase();
+          const sku = sanitizeSku(r[skuIdx]).toLowerCase();
           const qtyVal = r.length > qtyIdx ? parseStockValue(r[qtyIdx]) : 0;
           if (sku) {
             newStockMap[sku] = qtyVal;
@@ -903,8 +903,8 @@ export default function ShopeeTab({
       const row = rows[i] as any[];
       if (!row || row.length === 0) continue;
 
-      const productId = idxProductId !== -1 ? String(row[idxProductId] || '').trim() : '';
-      const variationId = idxVariationId !== -1 ? String(row[idxVariationId] || '').trim() : '';
+      const productId = idxProductId !== -1 ? sanitizeSku(row[idxProductId]) : '';
+      const variationId = idxVariationId !== -1 ? sanitizeSku(row[idxVariationId]) : '';
 
       if (!productId && !variationId) continue;
 
@@ -1027,20 +1027,20 @@ export default function ShopeeTab({
       (Number(fees?.packingFee) || 0);
 
     const updated = campaignItems.map(item => {
-      const prodId = item.productId.trim();
-      const varId = item.variationId.trim();
+      const prodId = sanitizeSku(item.productId);
+      const varId = sanitizeSku(item.variationId);
 
       let foundShopeeItem = shopeeItems.find(sItem => {
-        const sProdId = sItem.productId.trim();
-        const sVarId = sItem.variationId.trim();
+        const sProdId = sanitizeSku(sItem.productId);
+        const sVarId = sanitizeSku(sItem.variationId);
         if (varId && sVarId) return sProdId === prodId && sVarId === varId;
         return sProdId === prodId;
       });
 
       let matchedProduct: Product | undefined;
       if (foundShopeeItem) {
-        const vSku = foundShopeeItem.variationSku.trim().toLowerCase();
-        const pSku = foundShopeeItem.parentSku.trim().toLowerCase();
+        const vSku = sanitizeSku(foundShopeeItem.variationSku).toLowerCase();
+        const pSku = sanitizeSku(foundShopeeItem.parentSku).toLowerCase();
         matchedProduct = pSku ? systemProductMap.get(pSku) : undefined;
         if (!matchedProduct && vSku) matchedProduct = systemProductMap.get(vSku);
       }
@@ -1231,7 +1231,7 @@ export default function ShopeeTab({
     const map = new Map<string, Product>();
     productList.forEach(p => {
       if (p.sku) {
-        map.set(p.sku.trim().toLowerCase(), p);
+        map.set(sanitizeSku(p.sku).toLowerCase(), p);
       }
     });
     return map;
@@ -1240,8 +1240,8 @@ export default function ShopeeTab({
   // Combined matched information
   const analyzedItems = useMemo(() => {
     return shopeeItems.map(item => {
-      const vSku = item.variationSku.trim().toLowerCase();
-      const pSku = item.parentSku.trim().toLowerCase();
+      const vSku = sanitizeSku(item.variationSku).toLowerCase();
+      const pSku = sanitizeSku(item.parentSku).toLowerCase();
 
       // Match strategy: Parent SKU (col 5) first, then Variation SKU (col 6)
       let matchedProduct = pSku ? systemProductMap.get(pSku) : undefined;
@@ -1352,13 +1352,13 @@ export default function ShopeeTab({
   // Analyzed Campaign Items Memo
   const analyzedCampaignItems = useMemo(() => {
     return campaignItems.map(item => {
-      const prodId = item.productId.trim();
-      const varId = item.variationId.trim();
+      const prodId = sanitizeSku(item.productId);
+      const varId = sanitizeSku(item.variationId);
 
       // Find match in shopeeItems
       let foundShopeeItem = shopeeItems.find(sItem => {
-        const sProdId = sItem.productId.trim();
-        const sVarId = sItem.variationId.trim();
+        const sProdId = sanitizeSku(sItem.productId);
+        const sVarId = sanitizeSku(sItem.variationId);
         if (varId && sVarId) {
           return sProdId === prodId && sVarId === varId;
         }
@@ -1369,8 +1369,8 @@ export default function ShopeeTab({
       let matchedSku = '';
 
       if (foundShopeeItem) {
-        const vSku = foundShopeeItem.variationSku.trim().toLowerCase();
-        const pSku = foundShopeeItem.parentSku.trim().toLowerCase();
+        const vSku = sanitizeSku(foundShopeeItem.variationSku).toLowerCase();
+        const pSku = sanitizeSku(foundShopeeItem.parentSku).toLowerCase();
 
         matchedProduct = pSku ? systemProductMap.get(pSku) : undefined;
         if (!matchedProduct && vSku) {
