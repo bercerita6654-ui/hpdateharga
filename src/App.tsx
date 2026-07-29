@@ -710,12 +710,6 @@ export default function App() {
   const fetchCsvData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const resProd = await fetch(`${PRODUCT_DB_URL}&t=${Date.now()}`).catch(() => null);
-      if (!resProd || !resProd.ok) return;
-      const textProd = await resProd.text();
-      const linesProd = textProd.split('\n');
-      if (linesProd.length < 2) return;
-
       const parseLineLocal = (str: string) => {
         const arr = [];
         let q = false,
@@ -738,50 +732,27 @@ export default function App() {
         return Number(s.replace(/[.,]/g, '')) || 0;
       };
 
-      const headerProd = parseLineLocal(linesProd[0]).map(v => v.toLowerCase());
-      const idxProd = {
-        name: headerProd.findIndex(h => h.includes('description') || h.includes('nama') || h.includes('produk')),
-        sku: headerProd.findIndex(h => h.includes('code') || h.includes('sku') || h.includes('kode')),
-        unit: headerProd.findIndex(h => h.includes('unit')),
-        ecer: headerProd.findIndex(h => h.includes('ecer') || h.includes('retail')),
-        grosir: headerProd.findIndex(h => h.includes('grosir')),
-        partai: headerProd.findIndex(h => h.includes('partai'))
+      const parseStockValue = (valStr: string): number => {
+        if (!valStr) return 0;
+        let cleaned = valStr.trim();
+        if (cleaned.startsWith('-')) return 0;
+        const num = parseInt(cleaned.replace(/[^0-9-]/g, '')) || 0;
+        return num < 0 ? 0 : num;
       };
 
-      let products: Product[] = linesProd
-        .slice(1)
-        .map(l => {
-          if (!l.trim()) return null;
-          const r = parseLineLocal(l);
-          if (r.length < 3) return null;
-          return {
-            name: r[idxProd.name] || 'Produk',
-            sku: r[idxProd.sku] || '-',
-            unit: r[idxProd.unit] || 'pcs',
-            hpp: 0,
-            eceran: numHelper(r[idxProd.ecer]),
-            grosir: numHelper(r[idxProd.grosir]),
-            partai: numHelper(r[idxProd.partai])
-          };
-        })
-        .filter((p): p is Product => p !== null && p.name !== 'Produk');
+      const productMap: Record<string, Product> = {};
 
+      // 1. Fetch Stock List (HPP_DB_URL) as primary master list
       try {
         const resHpp = await fetch(`${HPP_DB_URL}&t=${Date.now()}`).catch(() => null);
         if (resHpp && resHpp.ok) {
           const textHpp = await resHpp.text();
           const linesHpp = textHpp.split('\n');
           if (linesHpp.length > 1) {
-            const hppMap: Record<string, number> = {};
-            const stockMap: Record<string, number> = {};
-            const eceranMap: Record<string, number> = {};
-            const grosirMap: Record<string, number> = {};
-            const partaiMap: Record<string, number> = {};
             const headerHpp = parseLineLocal(linesHpp[0]).map(v => v.toLowerCase().trim());
-
             let hppIdx = headerHpp.findIndex(h => h === 'hpp akhir' || h.includes('hpp akhir'));
             if (hppIdx === -1) hppIdx = 7; // Kolom 8 (index 7)
-            
+
             let ecerIdx = headerHpp.findIndex(h => h.includes('ecer') || h.includes('retail'));
             if (ecerIdx === -1) ecerIdx = 10; // Kolom 11 (index 10)
 
@@ -793,43 +764,37 @@ export default function App() {
 
             let qtyIdx = headerHpp.findIndex(h => h === 'stok' || h.includes('stok') || h.includes('qty') || h.includes('stock') || h.includes('quantity'));
             if (qtyIdx === -1) qtyIdx = 12;
-            
-            const skuIdx = 0;
 
-            const parseStockValue = (valStr: string): number => {
-              if (!valStr) return 0;
-              let cleaned = valStr.trim();
-              if (cleaned.startsWith('-')) return 0;
-              const num = parseInt(cleaned.replace(/[^0-9-]/g, '')) || 0;
-              return num < 0 ? 0 : num;
-            };
+            let nameIdx = headerHpp.findIndex(h => h.includes('description') || h.includes('nama') || h.includes('produk'));
+            if (nameIdx === -1) nameIdx = 1;
+
+            let unitIdx = headerHpp.findIndex(h => h.includes('unit'));
+            if (unitIdx === -1) unitIdx = 2;
+
+            const skuIdx = 0;
 
             linesHpp.slice(1).forEach(l => {
               if (!l.trim()) return;
               const r = parseLineLocal(l);
               const skuStr = r[skuIdx] ? r[skuIdx].trim() : '';
+              if (!skuStr) return;
+              const nameStr = r.length > nameIdx && r[nameIdx] ? r[nameIdx].trim() : 'Produk';
+              const unitStr = r.length > unitIdx && r[unitIdx] ? r[unitIdx].trim() : 'pcs';
               const hppVal = r.length > hppIdx ? numHelper(r[hppIdx]) : 0;
               const ecerVal = r.length > ecerIdx ? numHelper(r[ecerIdx]) : 0;
               const grosirVal = r.length > grosirIdx ? numHelper(r[grosirIdx]) : 0;
               const partaiVal = r.length > partaiIdx ? numHelper(r[partaiIdx]) : 0;
               const qtyVal = r.length > qtyIdx ? parseStockValue(r[qtyIdx]) : 0;
-              if (skuStr) {
-                hppMap[skuStr] = hppVal;
-                eceranMap[skuStr] = ecerVal;
-                grosirMap[skuStr] = grosirVal;
-                partaiMap[skuStr] = partaiVal;
-                stockMap[skuStr] = qtyVal;
-              }
-            });
-            products = products.map(p => {
-              const cleanedSku = p.sku.trim();
-              return {
-                ...p,
-                hpp: hppMap[cleanedSku] !== undefined ? hppMap[cleanedSku] : p.hpp,
-                eceran: eceranMap[cleanedSku] !== undefined ? eceranMap[cleanedSku] : p.eceran,
-                grosir: grosirMap[cleanedSku] !== undefined ? grosirMap[cleanedSku] : p.grosir,
-                partai: partaiMap[cleanedSku] !== undefined ? partaiMap[cleanedSku] : p.partai,
-                stock: stockMap[cleanedSku] !== undefined ? stockMap[cleanedSku] : 0
+
+              productMap[skuStr] = {
+                sku: skuStr,
+                name: nameStr,
+                unit: unitStr,
+                hpp: hppVal,
+                eceran: ecerVal,
+                grosir: grosirVal,
+                partai: partaiVal,
+                stock: qtyVal
               };
             });
           }
@@ -838,7 +803,62 @@ export default function App() {
         // ignore
       }
 
-      setProductList(products);
+      // 2. Fetch Product List (PRODUCT_DB_URL) to supplement/enrich any products or metadata
+      try {
+        const resProd = await fetch(`${PRODUCT_DB_URL}&t=${Date.now()}`).catch(() => null);
+        if (resProd && resProd.ok) {
+          const textProd = await resProd.text();
+          const linesProd = textProd.split('\n');
+          if (linesProd.length > 1) {
+            const headerProd = parseLineLocal(linesProd[0]).map(v => v.toLowerCase());
+            const idxProd = {
+              name: headerProd.findIndex(h => h.includes('description') || h.includes('nama') || h.includes('produk')),
+              sku: headerProd.findIndex(h => h.includes('code') || h.includes('sku') || h.includes('kode')),
+              unit: headerProd.findIndex(h => h.includes('unit')),
+              ecer: headerProd.findIndex(h => h.includes('ecer') || h.includes('retail')),
+              grosir: headerProd.findIndex(h => h.includes('grosir')),
+              partai: headerProd.findIndex(h => h.includes('partai'))
+            };
+
+            linesProd.slice(1).forEach(l => {
+              if (!l.trim()) return;
+              const r = parseLineLocal(l);
+              if (r.length < 3) return;
+              const skuStr = r[idxProd.sku] ? r[idxProd.sku].trim() : '';
+              if (!skuStr) return;
+              const nameStr = r[idxProd.name] || 'Produk';
+              const unitStr = r[idxProd.unit] || 'pcs';
+              const ecerVal = numHelper(r[idxProd.ecer]);
+              const grosirVal = numHelper(r[idxProd.grosir]);
+              const partaiVal = numHelper(r[idxProd.partai]);
+
+              if (productMap[skuStr]) {
+                if (productMap[skuStr].name === 'Produk' && nameStr !== 'Produk') {
+                  productMap[skuStr].name = nameStr;
+                }
+                if (productMap[skuStr].eceran === 0 && ecerVal > 0) productMap[skuStr].eceran = ecerVal;
+                if (productMap[skuStr].grosir === 0 && grosirVal > 0) productMap[skuStr].grosir = grosirVal;
+                if (productMap[skuStr].partai === 0 && partaiVal > 0) productMap[skuStr].partai = partaiVal;
+              } else {
+                productMap[skuStr] = {
+                  sku: skuStr,
+                  name: nameStr,
+                  unit: unitStr,
+                  hpp: 0,
+                  eceran: ecerVal,
+                  grosir: grosirVal,
+                  partai: partaiVal,
+                  stock: 0
+                };
+              }
+            });
+          }
+        }
+      } catch (errProd) {
+        // ignore
+      }
+
+      setProductList(Object.values(productMap));
 
       try {
         const resCat = await fetch(`${CATEGORY_DB_URL}&t=${Date.now()}`).catch(() => null);
