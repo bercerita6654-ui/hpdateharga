@@ -622,9 +622,27 @@ export default function TokopediaTab({
                 </span>
                 <span className="font-mono font-bold">+ {formatIDR(singleCalculation.fixedFee)}</span>
               </div>
-              <div className="pt-2 border-t border-slate-200 flex justify-between items-center text-[11px] text-slate-500">
-                <span>Total Sebelum Pembulatan:</span>
-                <span className="font-mono">{formatIDR(singleCalculation.rawTotal)}</span>
+              <div className="pt-3 border-t border-slate-200 flex justify-between items-center bg-emerald-50/60 p-2.5 rounded-lg -mx-1 border border-emerald-100/80">
+                <div>
+                  <span className="text-xs font-bold text-slate-700 block">Total Sebelum Pembulatan:</span>
+                  <span className="text-[10px] text-slate-400">Harga murni (Eceran + {adminPercent}% + {formatIDR(fixedFee)})</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono font-black text-lg md:text-xl text-emerald-900 tracking-tight">
+                    {formatIDR(singleCalculation.rawTotal)}
+                  </span>
+                  <button
+                    onClick={() => handleCopy(singleCalculation.rawTotal, 'raw_total')}
+                    className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-emerald-100 rounded transition-colors"
+                    title="Salin total sebelum pembulatan"
+                  >
+                    {copiedSku === 'raw_total' ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <Copy className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
