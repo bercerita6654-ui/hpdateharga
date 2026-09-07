@@ -18,7 +18,6 @@ import {
   Sparkles, 
   ArrowUpDown,
   Filter,
-  Layers,
   ChevronLeft,
   ChevronRight,
   Upload,
@@ -706,68 +705,35 @@ export default function TokopediaTab({
           </div>
         </div>
 
-        {/* RIGHT: QUICK TIERS & PEDOMAN TOKOPEDIA (5 COLS) */}
-        <div className="lg:col-span-5 space-y-6">
-          {/* Quick Simulation Matrix */}
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-2 mb-3">
-              <Layers className="w-4 h-4 text-emerald-600" />
-              Matriks Simulasi Cepat Tokopedia
-            </h3>
-            <p className="text-[11px] text-slate-500 mb-3">
-              Contoh simulasi langsung jika harga Eceran berada pada nominal tertentu:
-            </p>
-
-            <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden text-xs">
-              {[15000, 25000, 50000, 75000, 100000, 150000, 200000].map(sampleEceran => {
-                const calculated = calculateTokopediaPrice(sampleEceran, adminPercent, fixedFee, rounding);
-                return (
-                  <div key={sampleEceran} className="p-2.5 px-3 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                    <span className="text-slate-600">
-                      Eceran: <strong className="font-mono text-slate-800">{formatIDR(sampleEceran)}</strong>
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200/50">
-                        {formatIDR(calculated)}
-                      </span>
-                      <button
-                        onClick={() => handleCopy(calculated, `sample_${sampleEceran}`)}
-                        className="p-1 hover:bg-slate-200 rounded text-slate-400 hover:text-slate-700 transition-colors"
-                        title="Salin harga"
-                      >
-                        {copiedSku === `sample_${sampleEceran}` ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        ) : (
-                          <Copy className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
+        {/* RIGHT: PEDOMAN TOKOPEDIA (5 COLS) */}
+        <div className="lg:col-span-5 space-y-6 flex flex-col justify-between">
           {/* Guidance Info Card */}
-          <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-5 text-emerald-950 shadow-sm space-y-3">
-            <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-emerald-900">
-              <HelpCircle className="w-4 h-4 text-emerald-600" />
-              Penjelasan Rumus Tokopedia
+          <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-6 text-emerald-950 shadow-sm space-y-3.5 h-full flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-emerald-900 mb-2">
+                <HelpCircle className="w-4 h-4 text-emerald-600" />
+                Penjelasan Rumus Tokopedia
+              </div>
+              <ul className="text-xs text-emerald-900/90 space-y-2.5 list-disc pl-4 leading-relaxed">
+                <li>
+                  <strong>Harga Eceran:</strong> Menjadi patokan dasar pendapatan bersih toko Anda sebelum dipotong biaya platform.
+                </li>
+                <li>
+                  <strong>+23% Komisi:</strong> Mencakup rata-rata potongan biaya layanan Tokopedia (Official Store / Power Merchant Pro) serta perkiraan biaya program promosi atau cashback.
+                </li>
+                <li>
+                  <strong>+Rp 3.000:</strong> Alokasi biaya kardus packing, bubble wrap, lakban, label thermal, dan biaya admin proses transaksi lainnya.
+                </li>
+                <li>
+                  <strong>Pembulatan 1.000:</strong> Memastikan harga tayang rapi (misal Rp 64.900 dibulatkan menjadi Rp 65.000) agar menarik pembeli dan memudahkan perhitungan voucher toko.
+                </li>
+              </ul>
             </div>
-            <ul className="text-xs text-emerald-900/90 space-y-2 list-disc pl-4 leading-relaxed">
-              <li>
-                <strong>Harga Eceran:</strong> Menjadi patokan dasar pendapatan bersih toko Anda sebelum dipotong biaya platform.
-              </li>
-              <li>
-                <strong>+23% Komisi:</strong> Mencakup rata-rata potongan biaya layanan Tokopedia (Official Store / Power Merchant Pro) serta perkiraan biaya program promosi atau cashback.
-              </li>
-              <li>
-                <strong>+Rp 3.000:</strong> Alokasi biaya kardus packing, bubble wrap, lakban, label thermal, dan biaya admin proses transaksi lainnya.
-              </li>
-              <li>
-                <strong>Pembulatan 1.000:</strong> Memastikan harga tayang rapi (misal Rp 64.900 dibulatkan menjadi Rp 65.000) agar menarik pembeli dan memudahkan perhitungan voucher toko.
-              </li>
-            </ul>
+
+            <div className="pt-4 border-t border-emerald-200/70 text-[11px] text-emerald-800/80 bg-white/60 p-3 rounded-xl border border-emerald-200/50">
+              <span className="font-bold text-emerald-900 block mb-0.5">💡 Tips Penggunaan:</span>
+              Gunakan pencarian SKU atau masukkan nominal manual untuk melihat rincian kalkulasi seketika, atau unduh daftar harga lengkap seluruh produk lewat tabel di bawah.
+            </div>
           </div>
         </div>
       </div>
