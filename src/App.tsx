@@ -2740,6 +2740,8 @@ export default function App() {
             setActiveView={setActiveView}
             categories={categories}
             skuCategoryMap={skuCategoryMap}
+            onRefresh={fetchCsvData}
+            isLoading={isLoading}
           />
         )}
 

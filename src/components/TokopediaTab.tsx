@@ -28,6 +28,7 @@ import {
 import * as XLSX from 'xlsx';
 import { Product, Fees } from '../types';
 import { formatIDR, sanitizeSku } from '../utils/helpers';
+import TokopediaSimulator from './TokopediaSimulator';
 
 interface TokopediaTabProps {
   productList: Product[];
@@ -37,6 +38,8 @@ interface TokopediaTabProps {
   setActiveView?: (view: any) => void;
   categories?: string[];
   skuCategoryMap?: Record<string, string>;
+  onRefresh?: () => Promise<void> | void;
+  isLoading?: boolean;
 }
 
 export default function TokopediaTab({
@@ -46,18 +49,22 @@ export default function TokopediaTab({
   setProduct,
   setActiveView,
   categories = [],
-  skuCategoryMap = {}
+  skuCategoryMap = {},
+  onRefresh,
+  isLoading = false
 }: TokopediaTabProps) {
   // Formula parameters (Default: Eceran + 23% + 3.000)
   const [adminPercent, setAdminPercent] = useState<number>(23);
   const [fixedFee, setFixedFee] = useState<number>(3000);
   const [rounding, setRounding] = useState<string>('1000'); // Bulat 1000 default
 
+  // Refresh state
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string>('');
+
   // Single item calculator state
   const [selectedProductSku, setSelectedProductSku] = useState<string>('');
   const [manualEceran, setManualEceran] = useState<string>('');
-  const [searchProductQuery, setSearchProductQuery] = useState<string>('');
-  const [showProductDropdown, setShowProductDropdown] = useState<boolean>(false);
   const [copiedSku, setCopiedSku] = useState<string | null>(null);
   const [globalNotif, setGlobalNotif] = useState<string>('');
 
@@ -77,6 +84,23 @@ export default function TokopediaTab({
   const showToast = (msg: string) => {
     setGlobalNotif(msg);
     setTimeout(() => setGlobalNotif(''), 3000);
+  };
+
+  // Refresh handler to reload fresh stock and product list from Google Sheet
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      if (onRefresh) {
+        await onRefresh();
+      }
+      const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      setLastRefreshedAt(timeStr);
+      showToast('Data stock list produk berhasil diperbarui dari Google Sheet!');
+    } catch (err) {
+      showToast('Gagal memperbarui data dari sheet.');
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   // Helper copy text
@@ -130,45 +154,6 @@ export default function TokopediaTab({
     showToast('Parameter dikembalikan ke standar: 23% + Rp 3.000 (Bulat 1000)');
   };
 
-  // Selected single product object
-  const activeSingleProduct = useMemo(() => {
-    return productList.find(p => sanitizeSku(p.sku) === sanitizeSku(selectedProductSku));
-  }, [productList, selectedProductSku]);
-
-  // Determine current active Eceran in single simulator
-  const currentSingleEceran = useMemo(() => {
-    if (manualEceran !== '') {
-      return Number(manualEceran) || 0;
-    }
-    if (activeSingleProduct) {
-      return Number(activeSingleProduct.eceran) || 0;
-    }
-    return 0;
-  }, [manualEceran, activeSingleProduct]);
-
-  // Breakdown for current single product
-  const singleCalculation = useMemo(() => {
-    const eceran = currentSingleEceran;
-    const adminVal = eceran * (adminPercent / 100);
-    const rawTotal = eceran + adminVal + fixedFee;
-    const finalPrice = calculateTokopediaPrice(eceran, adminPercent, fixedFee, rounding);
-    return {
-      eceran,
-      adminVal,
-      fixedFee,
-      rawTotal,
-      finalPrice
-    };
-  }, [currentSingleEceran, adminPercent, fixedFee, rounding]);
-
-  // Filtered products list for dropdown in single calculator
-  const dropdownFilteredProducts = useMemo(() => {
-    if (!searchProductQuery.trim()) return productList.slice(0, 10);
-    const q = searchProductQuery.toLowerCase().trim();
-    return productList
-      .filter(p => p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q))
-      .slice(0, 15);
-  }, [productList, searchProductQuery]);
 
   // All catalog items with calculated Tokopedia prices
   const calculatedCatalog = useMemo(() => {
@@ -487,258 +472,7 @@ export default function TokopediaTab({
         </div>
       </div>
 
-      {/* TOP SECTION: SIMULATOR PER PRODUK & RUMUS BREAKDOWN */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* LEFT: INTERACTIVE SIMULATOR (7 COLS) */}
-        <div className="lg:col-span-7 bg-white rounded-2xl border border-slate-200 p-6 shadow-sm flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-emerald-50 text-emerald-600 rounded-xl">
-                  <Calculator className="w-5 h-5" />
-                </div>
-                <div>
-                  <h2 className="text-base font-black text-slate-800 tracking-tight">Simulasi Cepat Tokopedia</h2>
-                  <p className="text-[11px] text-slate-400">Pilih dari katalog atau ketik langsung harga Eceran</p>
-                </div>
-              </div>
-
-              {selectedProductSku && (
-                <button
-                  onClick={() => {
-                    setSelectedProductSku('');
-                    setManualEceran('');
-                  }}
-                  className="text-[10px] text-slate-400 hover:text-red-500 font-bold px-2 py-1 rounded bg-slate-100 hover:bg-red-50 transition-colors"
-                >
-                  Reset Pilihan
-                </button>
-              )}
-            </div>
-
-            {/* PRODUCT SELECTOR / SEARCH */}
-            <div className="mt-5 space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-                  <span>1. Pilih Produk Katalog (Opsional)</span>
-                  <span className="text-[10px] text-emerald-600 font-semibold lowercase">
-                    {productList.length} produk tersedia
-                  </span>
-                </label>
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                  <input
-                    type="text"
-                    placeholder="Cari SKU atau nama produk di katalog..."
-                    value={searchProductQuery}
-                    onChange={e => {
-                      setSearchProductQuery(e.target.value);
-                      setShowProductDropdown(true);
-                    }}
-                    onFocus={() => setShowProductDropdown(true)}
-                    className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"
-                  />
-
-                  {/* Dropdown Suggestions */}
-                  {showProductDropdown && dropdownFilteredProducts.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1.5 bg-white rounded-xl shadow-xl border border-slate-200 max-h-60 overflow-y-auto z-50 divide-y divide-slate-100 animate-in fade-in slide-in-from-top-2">
-                      <div className="p-2 bg-slate-50 text-[10px] font-bold text-slate-400 uppercase flex justify-between">
-                        <span>Pilih Produk</span>
-                        <button 
-                          onClick={() => setShowProductDropdown(false)}
-                          className="text-slate-400 hover:text-slate-600"
-                        >
-                          Tutup
-                        </button>
-                      </div>
-                      {dropdownFilteredProducts.map(p => (
-                        <div
-                          key={p.sku}
-                          onClick={() => {
-                            setSelectedProductSku(p.sku);
-                            setManualEceran('');
-                            setSearchProductQuery(`${p.sku} - ${p.name}`);
-                            setShowProductDropdown(false);
-                          }}
-                          className={`p-2.5 hover:bg-emerald-50/70 cursor-pointer flex items-center justify-between text-xs transition-colors ${
-                            selectedProductSku === p.sku ? 'bg-emerald-50 font-bold' : ''
-                          }`}
-                        >
-                          <div className="truncate pr-3">
-                            <span className="font-mono font-bold text-emerald-700 mr-2">{p.sku}</span>
-                            <span className="text-slate-700">{p.name}</span>
-                          </div>
-                          <div className="text-right flex-shrink-0">
-                            <div className="font-mono font-bold text-slate-800">{formatIDR(p.eceran)}</div>
-                            <div className="text-[10px] text-slate-400">Eceran</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* MANUAL ECERAN INPUT */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  2. Atau Ketik Nominal Harga Eceran (Rp)
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-3 text-slate-400 font-bold text-sm">Rp</span>
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="Contoh: 100000"
-                    value={manualEceran !== '' ? manualEceran : (activeSingleProduct ? activeSingleProduct.eceran : '')}
-                    onChange={e => {
-                      setManualEceran(e.target.value);
-                      if (selectedProductSku) setSelectedProductSku('');
-                    }}
-                    className="w-full pl-11 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-inner"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* BREAKDOWN DISPLAY */}
-            <div className="mt-5 p-4 bg-slate-50 rounded-xl border border-slate-200/80 space-y-2.5 text-xs">
-              <div className="flex justify-between items-center text-slate-600">
-                <span>Harga Eceran (Acuan Awal)</span>
-                <span className="font-mono font-bold text-slate-900">{formatIDR(singleCalculation.eceran)}</span>
-              </div>
-              <div className="flex justify-between items-center text-emerald-700">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  Komisi Admin Tokopedia (+{adminPercent}%)
-                </span>
-                <span className="font-mono font-bold">+ {formatIDR(singleCalculation.adminVal)}</span>
-              </div>
-              <div className="flex justify-between items-center text-emerald-700">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                  Biaya Packing & Operasional Tetap
-                </span>
-                <span className="font-mono font-bold">+ {formatIDR(singleCalculation.fixedFee)}</span>
-              </div>
-              <div className="pt-3 border-t border-slate-200 flex justify-between items-center bg-emerald-50/60 p-2.5 rounded-lg -mx-1 border border-emerald-100/80">
-                <div>
-                  <span className="text-xs font-bold text-slate-700 block">Total Sebelum Pembulatan:</span>
-                  <span className="text-[10px] text-slate-400">Harga murni (Eceran + {adminPercent}% + {formatIDR(fixedFee)})</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="font-mono font-black text-lg md:text-xl text-emerald-900 tracking-tight">
-                    {formatIDR(singleCalculation.rawTotal)}
-                  </span>
-                  <button
-                    onClick={() => handleCopy(singleCalculation.rawTotal, 'raw_total')}
-                    className="p-1 text-slate-400 hover:text-emerald-700 hover:bg-emerald-100 rounded transition-colors"
-                    title="Salin total sebelum pembulatan"
-                  >
-                    {copiedSku === 'raw_total' ? (
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    ) : (
-                      <Copy className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* FINAL RESULT PROMINENT CARD */}
-          <div className="mt-6 bg-gradient-to-r from-emerald-600 to-teal-600 rounded-xl p-5 text-white shadow-md flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div>
-              <div className="text-[10px] uppercase font-bold tracking-widest text-emerald-100 flex items-center gap-1.5">
-                <ShoppingBag className="w-3.5 h-3.5 text-emerald-200" />
-                Rekomendasi Harga Jual Tokopedia ({rounding === 'none' ? 'Asli' : `Bulat ${rounding}`})
-              </div>
-              <div className="text-3xl font-black font-mono tracking-tight text-white mt-1">
-                {formatIDR(singleCalculation.finalPrice)}
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <button
-                onClick={() => handleCopy(singleCalculation.finalPrice, 'single_main')}
-                disabled={singleCalculation.finalPrice <= 0}
-                className="flex-1 sm:flex-initial px-4 py-2.5 bg-white text-emerald-800 hover:bg-emerald-50 rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all active:scale-95 disabled:opacity-50"
-              >
-                {copiedSku === 'single_main' ? (
-                  <>
-                    <Check className="w-4 h-4 text-emerald-600" />
-                    Tersalin!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-4 h-4 text-emerald-600" />
-                    Salin Harga
-                  </>
-                )}
-              </button>
-
-              {setActiveView && setProduct && (
-                <button
-                  onClick={() => {
-                    if (singleCalculation.finalPrice > 0) {
-                      setProduct(prev => ({
-                        ...prev,
-                        basePrice: singleCalculation.finalPrice,
-                        ...(activeSingleProduct ? { hpp: activeSingleProduct.hpp } : {})
-                      }));
-                      if (activeSingleProduct && setSelectedSku) {
-                        setSelectedSku(activeSingleProduct.sku);
-                      }
-                      setActiveView('calculator');
-                      showToast('Harga dibawa ke kalkulator utama');
-                    }
-                  }}
-                  disabled={singleCalculation.finalPrice <= 0}
-                  className="px-3 py-2.5 bg-emerald-700/60 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs border border-emerald-400/30 flex items-center gap-1.5 transition-all disabled:opacity-50"
-                  title="Gunakan harga ini di Kalkulator Utama"
-                >
-                  <ExternalLink className="w-4 h-4" />
-                  Kalkulator Utama
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* RIGHT: PEDOMAN TOKOPEDIA (5 COLS) */}
-        <div className="lg:col-span-5 space-y-6 flex flex-col justify-between">
-          {/* Guidance Info Card */}
-          <div className="bg-emerald-50/70 border border-emerald-200 rounded-2xl p-6 text-emerald-950 shadow-sm space-y-3.5 h-full flex flex-col justify-between">
-            <div>
-              <div className="flex items-center gap-2 font-bold text-xs uppercase tracking-wider text-emerald-900 mb-2">
-                <HelpCircle className="w-4 h-4 text-emerald-600" />
-                Penjelasan Rumus Tokopedia
-              </div>
-              <ul className="text-xs text-emerald-900/90 space-y-2.5 list-disc pl-4 leading-relaxed">
-                <li>
-                  <strong>Harga Eceran:</strong> Menjadi patokan dasar pendapatan bersih toko Anda sebelum dipotong biaya platform.
-                </li>
-                <li>
-                  <strong>+23% Komisi:</strong> Mencakup rata-rata potongan biaya layanan Tokopedia (Official Store / Power Merchant Pro) serta perkiraan biaya program promosi atau cashback.
-                </li>
-                <li>
-                  <strong>+Rp 3.000:</strong> Alokasi biaya kardus packing, bubble wrap, lakban, label thermal, dan biaya admin proses transaksi lainnya.
-                </li>
-                <li>
-                  <strong>Pembulatan 1.000:</strong> Memastikan harga tayang rapi (misal Rp 64.900 dibulatkan menjadi Rp 65.000) agar menarik pembeli dan memudahkan perhitungan voucher toko.
-                </li>
-              </ul>
-            </div>
-
-            <div className="pt-4 border-t border-emerald-200/70 text-[11px] text-emerald-800/80 bg-white/60 p-3 rounded-xl border border-emerald-200/50">
-              <span className="font-bold text-emerald-900 block mb-0.5">💡 Tips Penggunaan:</span>
-              Gunakan pencarian SKU atau masukkan nominal manual untuk melihat rincian kalkulasi seketika, atau unduh daftar harga lengkap seluruh produk lewat tabel di bawah.
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* BOTTOM SECTION: ALL PRODUCT CATALOG TOKOPEDIA PRICE TABLE */}
+      {/* ALL PRODUCT CATALOG TOKOPEDIA PRICE TABLE */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         {/* Table Top Bar */}
         <div className="p-5 border-b border-slate-200 bg-slate-50/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -747,13 +481,30 @@ export default function TokopediaTab({
               <ShoppingBag className="w-5 h-5 text-emerald-600" />
               Katalog Lengkap &amp; Harga Jual Tokopedia
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Menampilkan {filteredCatalog.length} dari total {productList.length} produk katalog
-            </p>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-0.5">
+              <span>Menampilkan {filteredCatalog.length} dari total {productList.length} produk katalog</span>
+              {lastRefreshedAt && (
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-800 font-semibold bg-emerald-100/70 px-2.5 py-0.5 rounded-full border border-emerald-300/60">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
+                  Stock List Terakhir Diperbarui: {lastRefreshedAt}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Export and Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Refresh Data Button */}
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing || isLoading}
+              className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 text-xs font-bold rounded-xl border border-emerald-300 shadow-sm flex items-center gap-1.5 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+              title="Perbarui data stok dan harga produk terbaru langsung dari Google Sheet"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${(isRefreshing || isLoading) ? 'animate-spin' : ''}`} />
+              <span>{(isRefreshing || isLoading) ? 'Memperbarui Stock List...' : 'Refresh Data Sheet'}</span>
+            </button>
+
             {/* File Upload trigger */}
             <label className="px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold rounded-xl border border-slate-200 shadow-sm flex items-center gap-1.5 cursor-pointer transition-colors active:scale-95">
               <Upload className="w-3.5 h-3.5 text-indigo-600" />
@@ -875,7 +626,17 @@ export default function TokopediaTab({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200/60 font-medium">
-              {paginatedCatalog.length === 0 ? (
+              {(isRefreshing || isLoading) ? (
+                <tr>
+                  <td colSpan={10} className="text-center py-16 text-slate-500">
+                    <div className="flex flex-col items-center justify-center gap-2.5">
+                      <RefreshCw className="w-7 h-7 text-emerald-600 animate-spin" />
+                      <span className="font-bold text-xs text-slate-700">Sedang memperbarui data stock list produk dari Google Sheet...</span>
+                      <span className="text-[11px] text-slate-400">Sinkronisasi langsung dengan data HPP, Eceran, dan Stok terbaru</span>
+                    </div>
+                  </td>
+                </tr>
+              ) : paginatedCatalog.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="text-center py-12 text-slate-400">
                     <ShoppingBag className="w-8 h-8 mx-auto mb-2 text-slate-300" />
@@ -954,7 +715,7 @@ export default function TokopediaTab({
                             onClick={() => {
                               setSelectedProductSku(item.sku);
                               setManualEceran('');
-                              window.scrollTo({ top: 0, behavior: 'smooth' });
+                              document.getElementById('simulasi-cepat-tokopedia')?.scrollIntoView({ behavior: 'smooth' });
                             }}
                             className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg transition-colors"
                             title="Simulasi detail produk ini"
@@ -1012,6 +773,24 @@ export default function TokopediaTab({
           </div>
         </div>
       </div>
+
+      {/* SIMULATOR CEPAT PER PRODUK & PENJELASAN RUMUS (DIPINDAHKAN KE BAWAH KATALOG) */}
+      <TokopediaSimulator
+        productList={productList}
+        adminPercent={adminPercent}
+        fixedFee={fixedFee}
+        rounding={rounding}
+        selectedProductSku={selectedProductSku}
+        setSelectedProductSku={setSelectedProductSku}
+        manualEceran={manualEceran}
+        setManualEceran={setManualEceran}
+        copiedSku={copiedSku}
+        handleCopy={handleCopy}
+        showToast={showToast}
+        setProduct={setProduct}
+        setSelectedSku={setSelectedSku}
+        setActiveView={setActiveView}
+      />
 
       {/* MODAL: MASS CALCULATION FOR UPLOADED FILE */}
       {showUploadModal && uploadedItems.length > 0 && (
