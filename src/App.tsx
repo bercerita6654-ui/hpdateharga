@@ -43,6 +43,7 @@ import CompetitorTab from './components/CompetitorTab';
 import ShopeeTab from './components/ShopeeTab';
 import CartProfitMarginChart from './components/CartProfitMarginChart';
 import CartStockDistributionChart from './components/CartStockDistributionChart';
+import TokopediaTab from './components/TokopediaTab';
 
 const PRODUCT_DB_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCxz1GPm7QU9IS1yBiSjvIdNTLUsvvplOCyT_R3XH4O-LuVbHoY_bXn1LTH5lpnlolJ29BhUgEdnFm/pub?gid=1428805476&single=true&output=csv';
 const CATEGORY_DB_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRrRDnJctzeF3FC_-81KzNHZIX3epxC6WwdmIbhXBGl1rlRKvSUfsvsZCZtuiPyULe5b2wJXOIYK8hs/pub?gid=481142784&single=true&output=csv';
@@ -200,7 +201,7 @@ export default function App() {
 
   const [serverDrafts, setServerDrafts] = useState<Record<string, any>>({});
   const [expandedSubmissionId, setExpandedSubmissionId] = useState<string | number | null>(null);
-  const [activeView, setActiveView] = useState<'calculator' | 'competitor' | 'inbox' | 'history' | 'shopee' | 'gomall_shopee'>('calculator');
+  const [activeView, setActiveView] = useState<'calculator' | 'competitor' | 'inbox' | 'history' | 'shopee' | 'gomall_shopee' | 'tokopedia'>('calculator');
   const [displayLimit, setDisplayLimit] = useState(100);
 
   const [fees, setFees] = useState<Fees>(() => {
@@ -1841,10 +1842,10 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex bg-slate-50 p-1 rounded-lg border border-slate-200/60 w-full md:w-auto justify-between md:justify-start">
+          <div className="flex bg-slate-50 p-1 rounded-lg border border-slate-200/60 w-full md:w-auto justify-start overflow-x-auto">
             <button
               onClick={() => setActiveView('calculator')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 ${
+              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 whitespace-nowrap flex-shrink-0 ${
                 activeView === 'calculator'
                   ? 'bg-white border border-slate-200/50 shadow-sm text-indigo-600 font-semibold'
                   : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100/50'
@@ -1854,7 +1855,7 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveView('shopee')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 ${
+              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 whitespace-nowrap flex-shrink-0 ${
                 activeView === 'shopee'
                   ? 'bg-white border border-slate-200/50 shadow-sm text-indigo-600 font-semibold'
                   : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100/50'
@@ -1864,13 +1865,24 @@ export default function App() {
             </button>
             <button
               onClick={() => setActiveView('gomall_shopee')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 ${
+              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 whitespace-nowrap flex-shrink-0 ${
                 activeView === 'gomall_shopee'
                   ? 'bg-white border border-slate-200/50 shadow-sm text-indigo-600 font-semibold'
                   : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100/50'
               }`}
             >
               Gomall Shopee
+            </button>
+            <button
+              onClick={() => setActiveView('tokopedia')}
+              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+                activeView === 'tokopedia'
+                  ? 'bg-white border border-emerald-300 shadow-sm text-emerald-700 font-bold'
+                  : 'text-slate-500 hover:text-emerald-700 hover:bg-slate-100/50'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${activeView === 'tokopedia' ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
+              Tokopedia
             </button>
           </div>
 
@@ -2716,6 +2728,18 @@ export default function App() {
             cacheKeyPrefix="gomall_shopee"
             fileNamePrefix="GomallShopee_Update_Harga"
             campaignSheetUrl="https://docs.google.com/spreadsheets/d/e/2PACX-1vQYvBsVpsVwVG0x6GLMZXGnpneOkSC9NWo1ptPoqA5UWIbw12Tdk5YBVmjMBIkgetjktVK_hqKRNvK9/pub?gid=295919763&single=true&output=csv"
+          />
+        )}
+
+        {activeView === 'tokopedia' && (
+          <TokopediaTab
+            productList={productList}
+            fees={fees}
+            setSelectedSku={setSelectedSku}
+            setProduct={setProduct}
+            setActiveView={setActiveView}
+            categories={categories}
+            skuCategoryMap={skuCategoryMap}
           />
         )}
 
