@@ -22,6 +22,8 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
   const [isOpenMenu, setIsOpenMenu] = useState<boolean>(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  const [authError, setAuthError] = useState<string | null>(null);
+
   useEffect(() => {
     // Subscribe to auth changes across the app
     const unsubscribe = subscribeGoogleAuth((newUser) => {
@@ -47,6 +49,7 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
 
   const handleLogin = async () => {
     setIsLoading(true);
+    setAuthError(null);
     try {
       const profile = await loginWithGoogle();
       setUser(profile);
@@ -54,6 +57,8 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
       if (onAuthChange) onAuthChange(true);
     } catch (err: any) {
       console.error('Google Auth error:', err);
+      const msg = err?.message || 'Gagal login dengan Google.';
+      setAuthError(msg);
     } finally {
       setIsLoading(false);
     }
@@ -165,22 +170,38 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
   }
 
   return (
-    <button
-      onClick={handleLogin}
-      disabled={isLoading}
-      className={`flex items-center gap-2 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs cursor-pointer ${
-        compact
-          ? 'px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300'
-          : 'px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 hover:border-slate-400'
-      }`}
-      title="Hubungkan akun Google agar data harga grosir dapat langsung tersimpan ke Google Sheets"
-    >
-      {isLoading ? (
-        <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
-      ) : (
-        <GoogleIcon />
+    <div className="relative inline-flex items-center">
+      <button
+        onClick={handleLogin}
+        disabled={isLoading}
+        className={`flex items-center gap-2 rounded-xl text-xs font-bold transition-all active:scale-95 shadow-xs cursor-pointer ${
+          compact
+            ? 'px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300'
+            : 'px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 hover:border-slate-400'
+        }`}
+        title="Hubungkan akun Google via Firebase agar data harga grosir dapat langsung tersimpan ke Google Sheets"
+      >
+        {isLoading ? (
+          <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
+        ) : (
+          <GoogleIcon />
+        )}
+        <span>{isLoading ? 'Menghubungkan...' : 'Hubungkan Google'}</span>
+      </button>
+
+      {authError && (
+        <div className="absolute top-full left-0 mt-1.5 w-64 p-2 bg-red-50 border border-red-200 text-red-700 text-[11px] rounded-lg shadow-lg z-50 animate-in fade-in">
+          <div className="flex items-start justify-between gap-1">
+            <span>{authError}</span>
+            <button
+              onClick={() => setAuthError(null)}
+              className="text-red-400 hover:text-red-700 font-bold ml-1 text-xs"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
       )}
-      <span>{isLoading ? 'Menghubungkan...' : 'Hubungkan Google'}</span>
-    </button>
+    </div>
   );
 }

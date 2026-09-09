@@ -1,4 +1,12 @@
 import { formatIndoTimestamp } from '../utils/helpers';
+import {
+  auth,
+  googleProvider,
+  signInWithPopup,
+  signOut,
+  onAuthStateChanged
+} from './firebase';
+import { GoogleAuthProvider } from 'firebase/auth';
 
 export const TARGET_SPREADSHEET_ID = '1CXAjfviAGn9_TCzzJsYIpxMLthF8H6zTynQFftbIM9I';
 
@@ -35,6 +43,25 @@ let tokenExpiresAt: number = 0;
 let cachedUserProfile: GoogleUserProfile | null = null;
 let authListeners: Array<(user: GoogleUserProfile | null) => void> = [];
 
+// Initialize Firebase Auth listener to keep state in sync
+if (typeof window !== 'undefined') {
+  try {
+    onAuthStateChanged(auth, (firebaseUser) => {
+      if (firebaseUser) {
+        const profile: GoogleUserProfile = {
+          email: firebaseUser.email || undefined,
+          name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || undefined,
+          picture: firebaseUser.photoURL || undefined
+        };
+        sessionStorage.setItem('g_sheets_user', JSON.stringify(profile));
+        notifyAuthListeners(profile);
+      }
+    });
+  } catch (e) {
+    console.warn('Firebase onAuthStateChanged init warning', e);
+  }
+}
+
 export function subscribeGoogleAuth(callback: (user: GoogleUserProfile | null) => void): () => void {
   authListeners.push(callback);
   // Immediate call with current state
@@ -64,6 +91,14 @@ export function getStoredGoogleUser(): GoogleUserProfile | null {
       return cachedUserProfile;
     }
   } catch {}
+  if (auth.currentUser) {
+    cachedUserProfile = {
+      email: auth.currentUser.email || undefined,
+      name: auth.currentUser.displayName || auth.currentUser.email?.split('@')[0] || undefined,
+      picture: auth.currentUser.photoURL || undefined
+    };
+    return cachedUserProfile;
+  }
   return null;
 }
 
@@ -128,6 +163,11 @@ export async function fetchGoogleUserProfile(token: string): Promise<GoogleUserP
  * Log out and clear Google credentials
  */
 export function logoutGoogle(): void {
+  try {
+    signOut(auth).catch(() => {});
+  } catch (e) {
+    console.warn('Firebase signOut error', e);
+  }
   cachedToken = null;
   tokenExpiresAt = 0;
   cachedUserProfile = null;
@@ -138,31 +178,63 @@ export function logoutGoogle(): void {
 }
 
 /**
- * Explicit user login with Google popup
+ * Login with Firebase Google Auth (Popup).
+ * Requests Google Sheets permission so user can directly save wholesale prices.
  */
 export async function loginWithGoogle(): Promise<GoogleUserProfile | null> {
-  // Clear any existing expired token first
-  sessionStorage.removeItem('g_sheets_token');
-  sessionStorage.removeItem('g_sheets_token_exp');
-  cachedToken = null;
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    const token = credential?.accessToken;
 
-  const token = await getGoogleSheetsAccessToken(true);
-  const profile = await fetchGoogleUserProfile(token);
-  return profile;
+    const profile: GoogleUserProfile = {
+      email: result.user.email || undefined,
+      name: result.user.displayName || result.user.email?.split('@')[0] || undefined,
+      picture: result.user.photoURL || undefined
+    };
+
+    if (token) {
+      cachedToken = token;
+      tokenExpiresAt = Date.now() + 3500 * 1000;
+      sessionStorage.setItem('g_sheets_token', token);
+      sessionStorage.setItem('g_sheets_token_exp', String(tokenExpiresAt));
+    }
+
+    sessionStorage.setItem('g_sheets_user', JSON.stringify(profile));
+    notifyAuthListeners(profile);
+    return profile;
+  } catch (firebaseErr: any) {
+    console.error('Firebase signInWithPopup error:', firebaseErr);
+
+    if (firebaseErr?.code === 'auth/popup-closed-by-user') {
+      throw new Error('Jendela login Google ditutup sebelum selesai.');
+    } else if (firebaseErr?.code === 'auth/popup-blocked') {
+      throw new Error('Pop-up diblokir oleh browser. Izinkan pop-up untuk situs ini.');
+    } else if (firebaseErr?.code === 'auth/cancelled-popup-request') {
+      throw new Error('Permintaan login dibatalkan.');
+    }
+
+    // Attempt GIS fallback
+    try {
+      const gisToken = await getGisAccessToken(true);
+      const profile = await fetchGoogleUserProfile(gisToken);
+      return profile;
+    } catch {
+      throw new Error(firebaseErr?.message || 'Login Google dengan Firebase gagal.');
+    }
+  }
 }
 
 /**
- * Ensure Google Identity Services (GIS) client script is ready
+ * Ensure Google Identity Services (GIS) client script is ready (fallback)
  */
 export async function ensureGsiClient(): Promise<void> {
   if (typeof window === 'undefined') return;
   if ((window as any).google?.accounts?.oauth2) return;
 
   return new Promise((resolve, reject) => {
-    // Check if script is already present in DOM
     const existing = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
     if (existing) {
-      // Poll until ready
       let count = 0;
       const interval = setInterval(() => {
         count++;
@@ -171,7 +243,7 @@ export async function ensureGsiClient(): Promise<void> {
           resolve();
         } else if (count > 30) {
           clearInterval(interval);
-          reject(new Error('Google Identity Services script timeout. Pastikan koneksi internet aktif.'));
+          reject(new Error('Google Identity Services script timeout.'));
         }
       }, 100);
       return;
@@ -200,20 +272,9 @@ export async function ensureGsiClient(): Promise<void> {
 }
 
 /**
- * Request an access token using Google Identity Services Token Client
+ * Request an access token using Google Identity Services (GIS fallback)
  */
-export async function getGoogleSheetsAccessToken(interactive = true): Promise<string> {
-  // Check stored in-memory or sessionStorage
-  if (!cachedToken) {
-    cachedToken = sessionStorage.getItem('g_sheets_token');
-    tokenExpiresAt = Number(sessionStorage.getItem('g_sheets_token_exp') || '0');
-  }
-
-  // If token is still valid with 2 min safety margin, return it
-  if (cachedToken && Date.now() < tokenExpiresAt - 120000) {
-    return cachedToken;
-  }
-
+async function getGisAccessToken(interactive = true): Promise<string> {
   await ensureGsiClient();
 
   const google = (window as any).google;
@@ -239,7 +300,6 @@ export async function getGoogleSheetsAccessToken(interactive = true): Promise<st
           tokenExpiresAt = Date.now() + expiresIn * 1000;
           sessionStorage.setItem('g_sheets_token', cachedToken!);
           sessionStorage.setItem('g_sheets_token_exp', String(tokenExpiresAt));
-          // Asynchronously fetch profile
           fetchGoogleUserProfile(cachedToken!).catch(() => {});
           resolve(cachedToken!);
         },
@@ -253,6 +313,30 @@ export async function getGoogleSheetsAccessToken(interactive = true): Promise<st
       reject(err);
     }
   });
+}
+
+/**
+ * Primary token getter: retrieves active token or triggers login if expired
+ */
+export async function getGoogleSheetsAccessToken(interactive = true): Promise<string> {
+  if (!cachedToken) {
+    cachedToken = sessionStorage.getItem('g_sheets_token');
+    tokenExpiresAt = Number(sessionStorage.getItem('g_sheets_token_exp') || '0');
+  }
+
+  // If token is still valid with 1 min safety margin, return it
+  if (cachedToken && Date.now() < tokenExpiresAt - 60000) {
+    return cachedToken;
+  }
+
+  if (interactive) {
+    await loginWithGoogle();
+    if (cachedToken && Date.now() < tokenExpiresAt - 60000) {
+      return cachedToken;
+    }
+  }
+
+  return await getGisAccessToken(interactive);
 }
 
 /**
