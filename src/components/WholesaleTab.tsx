@@ -299,7 +299,7 @@ export default function WholesaleTab({
     return [
       { id: '1', minQty: 3, maxQty: 5, price: Math.round((defaultBase * 0.95) / 1000) * 1000 },
       { id: '2', minQty: 6, maxQty: 11, price: Math.round((defaultBase * 0.90) / 1000) * 1000 },
-      { id: '3', minQty: 12, maxQty: null, price: Math.round((defaultBase * 0.85) / 1000) * 1000 }
+      { id: '3', minQty: 12, maxQty: 100, price: Math.round((defaultBase * 0.85) / 1000) * 1000 }
     ];
   });
 
@@ -330,16 +330,16 @@ export default function WholesaleTab({
     const base = normalPrice > 0 ? normalPrice : 100000;
 
     if (presetName === 'reseller') {
-      // 3 Tiers: 3-5 pcs (-5%), 6-11 pcs (-10%), 12+ pcs (-15%)
+      // 3 Tiers: 3-5 pcs (-5%), 6-11 pcs (-10%), 12-100 pcs (-15%)
       const p1 = applyRound(base * 0.95);
       const p2 = applyRound(base * 0.90);
       const p3 = applyRound(base * 0.85);
       setTiers([
         { id: '1', minQty: 3, maxQty: 5, price: p1 },
         { id: '2', minQty: 6, maxQty: 11, price: p2 },
-        { id: '3', minQty: 12, maxQty: null, price: p3 }
+        { id: '3', minQty: 12, maxQty: 100, price: p3 }
       ]);
-      showToast('Skema Reseller Standar (3 Tier) diterapkan');
+      showToast('Skema Reseller Standar (3 Tier: 12-100) diterapkan');
     } else if (presetName === 'dozen') {
       // 3 Tiers Lusinan: 6-11 pcs (½ Lusin), 12-23 pcs (1 Lusin), 24+ pcs (2 Lusin)
       const p1 = applyRound(base * 0.92);
@@ -377,7 +377,7 @@ export default function WholesaleTab({
       setTiers([
         { id: '1', minQty: 3, maxQty: 5, price: Math.max(effectiveHpp + 2000, p1) },
         { id: '2', minQty: 6, maxQty: 11, price: Math.max(effectiveHpp + 1500, p2) },
-        { id: '3', minQty: 12, maxQty: null, price: Math.max(effectiveHpp + 1000, p3) }
+        { id: '3', minQty: 12, maxQty: 100, price: Math.max(effectiveHpp + 1000, p3) }
       ]);
       showToast('Skema Target Margin Bersih Proteksi HPP diterapkan');
     }
