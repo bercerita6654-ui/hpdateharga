@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LogIn, LogOut, CheckCircle2, ChevronDown, RefreshCw, ExternalLink, FileSpreadsheet } from 'lucide-react';
+import { LogIn, LogOut, CheckCircle2, ChevronDown, RefreshCw, ExternalLink, FileSpreadsheet, ShieldAlert } from 'lucide-react';
 import {
   getStoredGoogleUser,
   hasValidGoogleToken,
@@ -9,6 +9,7 @@ import {
   GoogleUserProfile,
   TARGET_SPREADSHEET_ID
 } from '../services/googleSheetsService';
+import FirebaseAuthDomainModal from './FirebaseAuthDomainModal';
 
 interface GoogleAuthButtonProps {
   compact?: boolean;
@@ -23,6 +24,8 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
   const menuRef = useRef<HTMLDivElement>(null);
 
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isDomainError, setIsDomainError] = useState<boolean>(false);
+  const [showDomainModal, setShowDomainModal] = useState<boolean>(false);
 
   useEffect(() => {
     // Subscribe to auth changes across the app
@@ -50,6 +53,7 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
   const handleLogin = async () => {
     setIsLoading(true);
     setAuthError(null);
+    setIsDomainError(false);
     try {
       const profile = await loginWithGoogle();
       setUser(profile);
@@ -57,6 +61,15 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
       if (onAuthChange) onAuthChange(true);
     } catch (err: any) {
       console.error('Google Auth error:', err);
+      const isUnauthorized =
+        err?.code === 'auth/unauthorized-domain' ||
+        String(err?.message || '').toLowerCase().includes('unauthorized-domain') ||
+        String(err?.message || '').toLowerCase().includes('authorized domains');
+
+      if (isUnauthorized) {
+        setIsDomainError(true);
+        setShowDomainModal(true);
+      }
       const msg = err?.message || 'Gagal login dengan Google.';
       setAuthError(msg);
     } finally {
@@ -190,18 +203,37 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
       </button>
 
       {authError && (
-        <div className="absolute top-full left-0 mt-1.5 w-64 p-2 bg-red-50 border border-red-200 text-red-700 text-[11px] rounded-lg shadow-lg z-50 animate-in fade-in">
-          <div className="flex items-start justify-between gap-1">
-            <span>{authError}</span>
+        <div className="absolute top-full right-0 sm:left-0 sm:right-auto mt-1.5 w-72 p-2.5 bg-red-50 border border-red-200 text-red-700 text-[11px] rounded-xl shadow-xl z-50 animate-in fade-in">
+          <div className="flex items-start justify-between gap-1.5">
+            <div className="space-y-1">
+              <span className="font-semibold block">{authError}</span>
+              {isDomainError && (
+                <button
+                  type="button"
+                  onClick={() => setShowDomainModal(true)}
+                  className="mt-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10.5px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                >
+                  <ShieldAlert className="w-3 h-3" />
+                  <span>Buka Panduan Otorisasi Domain</span>
+                </button>
+              )}
+            </div>
             <button
               onClick={() => setAuthError(null)}
-              className="text-red-400 hover:text-red-700 font-bold ml-1 text-xs"
+              className="text-red-400 hover:text-red-700 font-bold ml-1 text-xs cursor-pointer p-0.5"
             >
               ✕
             </button>
           </div>
         </div>
       )}
+
+      {/* FIREBASE AUTH DOMAIN SETUP MODAL */}
+      <FirebaseAuthDomainModal
+        isOpen={showDomainModal}
+        onClose={() => setShowDomainModal(false)}
+        onRetry={handleLogin}
+      />
     </div>
   );
 }

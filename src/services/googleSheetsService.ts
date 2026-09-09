@@ -212,9 +212,16 @@ export async function loginWithGoogle(): Promise<GoogleUserProfile | null> {
       throw new Error('Pop-up diblokir oleh browser. Izinkan pop-up untuk situs ini.');
     } else if (firebaseErr?.code === 'auth/cancelled-popup-request') {
       throw new Error('Permintaan login dibatalkan.');
+    } else if (firebaseErr?.code === 'auth/unauthorized-domain') {
+      const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+      const domainErr: any = new Error(
+        `Domain (${hostname}) belum didaftarkan di Authorized Domains Firebase. Silakan tambahkan domain ini di Firebase Console.`
+      );
+      domainErr.code = 'auth/unauthorized-domain';
+      throw domainErr;
     }
 
-    // Attempt GIS fallback
+    // Attempt GIS fallback if available
     try {
       const gisToken = await getGisAccessToken(true);
       const profile = await fetchGoogleUserProfile(gisToken);

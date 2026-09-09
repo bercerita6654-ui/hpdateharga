@@ -32,7 +32,8 @@ import {
   CheckCheck,
   BookmarkCheck,
   History,
-  Edit3
+  Edit3,
+  ShieldAlert
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Product, Fees } from '../types';
@@ -46,6 +47,7 @@ import {
   TARGET_SPREADSHEET_ID
 } from '../services/googleSheetsService';
 import GoogleAuthButton from './GoogleAuthButton';
+import FirebaseAuthDomainModal from './FirebaseAuthDomainModal';
 
 export interface WholesaleTier {
   id: string;
@@ -150,6 +152,7 @@ export default function WholesaleTab({
 
   const [isBasketModalOpen, setIsBasketModalOpen] = useState<boolean>(false);
   const [isSavingBatch, setIsSavingBatch] = useState<boolean>(false);
+  const [showDomainModal, setShowDomainModal] = useState<boolean>(false);
   const [batchResultModal, setBatchResultModal] = useState<{
     show: boolean;
     success?: boolean;
@@ -643,25 +646,27 @@ export default function WholesaleTab({
     }
   };
 
-  // Copy skema grosir sesuai format ringkas yang diminta
+  // Copy skema grosir formatted for WhatsApp
   const copyShopeeTableText = () => {
     const productTitle = activeProduct
       ? `${activeProduct.sku} - ${activeProduct.name}`
       : (selectedSku ? `${selectedSku} - Produk` : 'PRODUK GROSIR');
     const unitUpper = (activeUnit || 'PCS').toUpperCase();
 
-    let text = `${productTitle}\n`;
-    text += `Harga Normal: ${formatIDR(normalPrice)}/${unitUpper}\n`;
-    text += `---------------------------------\n`;
+    let text = `*SKEMA HARGA GROSIR*\n`;
+    text += `📦 *${productTitle}*\n`;
+    text += `💰 Harga Normal: *${formatIDR(normalPrice)}* / ${unitUpper}\n`;
+    text += `━━━━━━━━━━━━━━━━━━━━━\n`;
     evaluatedTiers.forEach((t, i) => {
-      const maxQtyStr = t.maxQty !== null && t.maxQty !== undefined && t.maxQty !== '' ? t.maxQty : 'dst';
-      text += `Tier ${i + 1}: ${t.minQty} - ${maxQtyStr} -> ${formatIDR(t.price)}/${unitUpper}\n`;
+      const maxQtyStr = t.maxQty !== null && t.maxQty !== undefined && t.maxQty !== '' ? `${t.maxQty}` : 'dst';
+      text += `🔹 *Tier ${i + 1}* (${t.minQty} - ${maxQtyStr} ${unitUpper}) ➔ *${formatIDR(t.price)}* / ${unitUpper}\n`;
     });
-    text += `---------------------------------`;
+    text += `━━━━━━━━━━━━━━━━━━━━━\n`;
+    text += `_Harga grosir otomatis berlaku saat checkout di Shopee._`;
 
     navigator.clipboard.writeText(text);
     setCopiedKey('all_shopee_table');
-    showToast('Skema harga grosir berhasil disalin!');
+    showToast('Format WhatsApp berhasil disalin ke clipboard!');
     setTimeout(() => {
       setCopiedKey(null);
     }, 2000);
@@ -892,6 +897,19 @@ export default function WholesaleTab({
         {/* Action Buttons */}
         <div className="flex items-center gap-2 flex-wrap">
           <GoogleAuthButton compact={true} />
+
+          {/* LIHAT GOOGLE SPREADSHEET BUTTON */}
+          <a
+            href={`https://docs.google.com/spreadsheets/d/${TARGET_SPREADSHEET_ID}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer hover:shadow-sm"
+            title={`Buka Google Spreadsheet (${TARGET_SPREADSHEET_ID}) di tab baru`}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Lihat Spreadsheet</span>
+            <ExternalLink className="w-3 h-3 text-emerald-600" />
+          </a>
 
           {/* KERANJANG GROSIR (BATCH QUEUE) BUTTON */}
           <button
@@ -1535,17 +1553,17 @@ export default function WholesaleTab({
                 onClick={copyShopeeTableText}
                 className={`px-3.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer ml-1.5 border ${
                   copiedKey === 'all_shopee_table'
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 ring-2 ring-emerald-300'
-                    : 'bg-blue-600 hover:bg-blue-700 text-white border-blue-700 hover:shadow-md ring-1 ring-blue-500/30'
+                    ? 'bg-emerald-700 hover:bg-emerald-800 text-white border-emerald-800 ring-2 ring-emerald-300'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 hover:shadow-md ring-1 ring-emerald-500/30'
                 }`}
-                title="Salin skema grosir sesuai format ringkas"
+                title="Salin format teks skema grosir siap kirim ke chat WhatsApp"
               >
                 {copiedKey === 'all_shopee_table' ? (
                   <Check className="w-4 h-4 text-white" />
                 ) : (
                   <Copy className="w-4 h-4 text-white" />
                 )}
-                <span>{copiedKey === 'all_shopee_table' ? 'Tersalin ke Clipboard!' : 'Salin Skema Grosir'}</span>
+                <span>{copiedKey === 'all_shopee_table' ? 'Tersalin ke Whatsapp!' : 'Salin ke Whatsapp'}</span>
               </button>
 
               <button
@@ -1579,6 +1597,18 @@ export default function WholesaleTab({
                 )}
                 <span>{isSavingToSheets ? 'Menyimpan...' : 'Simpan ke Spreadsheet'}</span>
               </button>
+
+              <a
+                href={`https://docs.google.com/spreadsheets/d/${TARGET_SPREADSHEET_ID}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer ml-1.5 hover:shadow-md"
+                title={`Buka Google Spreadsheet (${TARGET_SPREADSHEET_ID}) di tab baru`}
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                <span>Lihat Spreadsheet</span>
+                <ExternalLink className="w-3 h-3 text-emerald-600" />
+              </a>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
               Sesuaikan kuantitas (Min - Max Qty) dan tentukan harga grosir satuan. Sistem otomatis menghitung potongan Shopee Star+ dan validasi kepatuhan.
@@ -1588,19 +1618,11 @@ export default function WholesaleTab({
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => applyRecommendedPrices()}
-              className="px-3 py-2 bg-white hover:bg-orange-50 text-orange-700 border border-orange-300 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
+              className="px-3.5 py-2 bg-white hover:bg-orange-50 text-orange-700 border border-orange-300 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 cursor-pointer"
               title="Terapkan harga rekomendasi otomatis ke seluruh tingkatan tier"
             >
               <Sparkles className="w-3.5 h-3.5 text-orange-600" />
               Terapkan Rekomendasi Tier
-            </button>
-            <button
-              onClick={addTier}
-              disabled={tiers.length >= 5}
-              className="px-3.5 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Tambah Tingkatan (Maks 5)
             </button>
           </div>
         </div>
@@ -2102,16 +2124,28 @@ export default function WholesaleTab({
                 <div className="space-y-3">
                   <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 flex items-start gap-2.5">
                     <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
-                    <div>
+                    <div className="space-y-1.5 flex-1">
                       <p className="font-semibold">Terjadi kendala saat menyimpan:</p>
-                      <p className="mt-1 font-mono text-[11px] bg-white/70 p-2 rounded border border-red-100 break-all">
+                      <p className="font-mono text-[11px] bg-white/70 p-2 rounded border border-red-100 break-all">
                         {sheetsModalData.message}
                       </p>
+                      {(sheetsModalData.message?.toLowerCase().includes('unauthorized-domain') ||
+                        sheetsModalData.message?.toLowerCase().includes('authorized domains')) && (
+                        <button
+                          type="button"
+                          onClick={() => setShowDomainModal(true)}
+                          className="mt-1 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                        >
+                          <ShieldAlert className="w-3.5 h-3.5" />
+                          <span>Buka Panduan Otorisasi Domain Firebase</span>
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1.5">
                     <p className="font-bold text-slate-700">Panduan Mengatasi:</p>
                     <ul className="list-disc pl-4 space-y-1">
+                      <li>Pastikan Anda telah mengizinkan domain aplikasi ini di Firebase Authorized Domains.</li>
                       <li>Pastikan Anda mengizinkan pop-up otentikasi Google pada browser Anda.</li>
                       <li>Pilih akun Google yang memiliki hak akses edit pada spreadsheet target.</li>
                     </ul>
@@ -2439,6 +2473,12 @@ export default function WholesaleTab({
           </div>
         </div>
       )}
+
+      {/* FIREBASE AUTH DOMAIN ASSISTANCE MODAL */}
+      <FirebaseAuthDomainModal
+        isOpen={showDomainModal}
+        onClose={() => setShowDomainModal(false)}
+      />
     </div>
   );
 }
