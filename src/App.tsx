@@ -9,8 +9,6 @@ import {
   RefreshCw,
   ChevronDown,
   Settings,
-  LogOut,
-  Lock,
   Plus,
   Send,
   Inbox,
@@ -133,10 +131,7 @@ const calculateLevenshteinSimilarity = (str1: string, str2: string): number => {
 };
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [currentUser, setCurrentUser] = useState<string | null>(null);
-  const [loginForm, setLoginForm] = useState({ username: '', password: '' });
-  const [loginError, setLoginError] = useState('');
+  const [currentUser] = useState<string | null>('admin');
 
   const [, setDb] = useState<any>(null);
   const [, setAppId] = useState<string | null>(null);
@@ -940,14 +935,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (isLoggedIn) {
-      if (productList.length === 0) fetchCsvData();
-      fetchHistoryData();
-      fetchFeesData();
-      const interval = setInterval(fetchHistoryData, 60000);
-      return () => clearInterval(interval);
-    }
-  }, [isLoggedIn, fetchCsvData, fetchHistoryData, fetchFeesData, productList.length]);
+    if (productList.length === 0) fetchCsvData();
+    fetchHistoryData();
+    fetchFeesData();
+    const interval = setInterval(fetchHistoryData, 60000);
+    return () => clearInterval(interval);
+  }, [fetchCsvData, fetchHistoryData, fetchFeesData, productList.length]);
 
   useEffect(() => {
     try {
@@ -1460,19 +1453,6 @@ export default function App() {
     a.click();
   };
 
-  const handleLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    const user = loginForm.username.toLowerCase().trim();
-    const pass = loginForm.password;
-    if (['server', 'bobby', 'admin', 'stefany', 'isa', 'winda'].includes(user) && pass === '0000') {
-      setIsLoggedIn(true);
-      setCurrentUser(user);
-      setActiveView('calculator');
-    } else {
-      setLoginError('Login Gagal. Pastikan Username dan Password benar.');
-    }
-  };
-
   const filteredPending = pendingList.filter(item => {
     if (pendingFilter === 'all') return true;
     return item.status === pendingFilter;
@@ -1504,57 +1484,6 @@ export default function App() {
   const pendingSenders = Object.keys(groupedPending).sort();
   const groupedCompleted = groupBySender(paginatedCompleted);
   const completedSenders = Object.keys(groupedCompleted).sort();
-
-  if (!isLoggedIn) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-          <div className="bg-white border-b border-slate-100 p-8 text-center flex flex-col items-center">
-            {/* Geometric balance logo element: rotatable 45deg square */}
-            <div className="w-12 h-12 bg-indigo-600 rounded-sm transform rotate-45 flex items-center justify-center mb-6 shadow-sm">
-              <div className="w-4 h-4 bg-white"></div>
-            </div>
-            <h1 className="text-xl font-bold text-slate-900 tracking-tight uppercase font-display">Equilibrium</h1>
-            <p className="text-[10px] text-slate-400 mt-2 uppercase tracking-widest font-mono">MarpApps Pricing System</p>
-          </div>
-          <form onSubmit={handleLogin} className="p-8 space-y-5">
-            {loginError && (
-              <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center border border-red-100">
-                <Info className="w-4 h-4 mr-2 flex-shrink-0" />
-                {loginError}
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Username</label>
-              <input
-                type="text"
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 transition-all outline-none"
-                placeholder="Masukkan username..."
-                value={loginForm.username}
-                onChange={e => setLoginForm({ ...loginForm, username: e.target.value })}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest ml-1">Password</label>
-              <input
-                type="password"
-                className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20 transition-all outline-none"
-                placeholder="Masukkan password..."
-                value={loginForm.password}
-                onChange={e => setLoginForm({ ...loginForm, password: e.target.value })}
-              />
-            </div>
-            <button
-              type="submit"
-              className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-lg hover:bg-indigo-700 shadow-sm transition-all active:scale-[0.98] mt-2 text-xs uppercase tracking-widest"
-            >
-              Masuk Dashboard
-            </button>
-          </form>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-slate-50 p-3 md:p-6 pb-24 text-slate-800 font-sans">
@@ -1936,17 +1865,6 @@ export default function App() {
                 <Settings className="w-5 h-5" />
               </button>
             )}
-            <button
-              onClick={() => {
-                setIsLoggedIn(false);
-                setCurrentUser(null);
-                localStorage.removeItem('marketplace_submissions');
-              }}
-              className="p-2.5 text-red-500 hover:bg-red-50 rounded-lg transition-all"
-              title="Keluar"
-            >
-              <LogOut className="w-5 h-5" />
-            </button>
           </div>
         </header>
 
@@ -3044,21 +2962,19 @@ export default function App() {
       </div>
 
       {/* FAB KALKULATOR DASAR */}
-      {isLoggedIn && (
-        <div className="fixed bottom-6 right-6 flex flex-col items-end z-[998]">
-          {showBasicCalc && <BasicCalculator onClose={() => setShowBasicCalc(false)} />}
-          <button
-            onClick={() => setShowBasicCalc(!showBasicCalc)}
-            className={`p-4 rounded-full shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center justify-center border border-white/20 ${
-              showBasicCalc
-                ? 'bg-slate-800 text-white'
-                : 'bg-gradient-to-tr from-indigo-600 to-blue-500 text-white hover:shadow-2xl hover:shadow-blue-500/30'
-            }`}
-          >
-            {showBasicCalc ? <Plus className="w-6 h-6 rotate-45" /> : <Calculator className="w-6 h-6" />}
-          </button>
-        </div>
-      )}
+      <div className="fixed bottom-6 right-6 flex flex-col items-end z-[998]">
+        {showBasicCalc && <BasicCalculator onClose={() => setShowBasicCalc(false)} />}
+        <button
+          onClick={() => setShowBasicCalc(!showBasicCalc)}
+          className={`p-4 rounded-full shadow-xl transition-all duration-300 hover:scale-105 active:scale-95 flex items-center justify-center border border-white/20 ${
+            showBasicCalc
+              ? 'bg-slate-800 text-white'
+              : 'bg-gradient-to-tr from-indigo-600 to-blue-500 text-white hover:shadow-2xl hover:shadow-blue-500/30'
+          }`}
+        >
+          {showBasicCalc ? <Plus className="w-6 h-6 rotate-45" /> : <Calculator className="w-6 h-6" />}
+        </button>
+      </div>
     </div>
   );
 }
