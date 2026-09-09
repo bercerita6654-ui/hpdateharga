@@ -443,9 +443,19 @@ export default function WholesaleTab({
     const item = { ...updated[index] };
 
     if (field === 'minQty') {
-      item.minQty = Math.max(2, parseInt(value, 10) || 2);
+      if (value === '' || value === null || value === undefined) {
+        item.minQty = '' as any;
+      } else {
+        const parsed = parseInt(value, 10);
+        item.minQty = isNaN(parsed) ? ('' as any) : Math.max(1, parsed);
+      }
     } else if (field === 'maxQty') {
-      item.maxQty = value === '' || value === null ? null : Math.max(item.minQty + 1, parseInt(value, 10) || (item.minQty + 1));
+      if (value === '' || value === null || value === undefined) {
+        item.maxQty = null;
+      } else {
+        const parsed = parseInt(value, 10);
+        item.maxQty = isNaN(parsed) ? null : Math.max(1, parsed);
+      }
     } else if (field === 'price') {
       item.price = Math.max(0, parseInt(value, 10) || 0);
     }
@@ -466,9 +476,9 @@ export default function WholesaleTab({
   // --- CALCULATIONS FOR EACH TIER (STAR+ FEES) ---
   const evaluatedTiers = useMemo(() => {
     return tiers.map((tier, idx) => {
-      const price = tier.price;
+      const price = Number(tier.price) || 0;
       const discountFromNormal = normalPrice > 0 ? ((normalPrice - price) / normalPrice) * 100 : 0;
-      const sampleQty = tier.minQty; // Simulasi pesanan kuantitas batas bawah tier
+      const sampleQty = Math.max(1, Number(tier.minQty) || 1); // Simulasi pesanan kuantitas batas bawah tier
       
       // 1. Potongan Biaya Persentase (11% Admin + 0.5% Asuransi + 1% AMS = 12.5%)
       const percentCutPerUnit = (price * totalPercentageRate) / 100;
@@ -1633,7 +1643,15 @@ export default function WholesaleTab({
             <thead>
               <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                 <th className="p-3.5 pl-5">Tingkatan</th>
-                <th className="p-3.5">Rentang Qty ({activeUnit})</th>
+                <th className="p-3.5">
+                  <div className="flex items-center gap-1">
+                    <span>Rentang Qty ({activeUnit})</span>
+                    <Edit3 className="w-3 h-3 text-orange-500" />
+                  </div>
+                  <div className="text-[9px] text-slate-400 font-normal lowercase tracking-normal">
+                    bisa dicustom bebas
+                  </div>
+                </th>
                 <th className="p-3.5">
                   <div className="flex items-center gap-1">
                     <span>Harga Grosir Satuan (Rp)</span>
@@ -1712,46 +1730,37 @@ export default function WholesaleTab({
                       </div>
                     </td>
 
-                    {/* Min & Max Qty Inputs */}
+                    {/* Min & Max Qty Inputs (Customizable) */}
                     <td className="p-3.5">
                       <div className="flex items-center gap-1.5 font-mono">
-                        <input
-                          type="number"
-                          min="2"
-                          value={t.minQty}
-                          onChange={e => updateTier(index, 'minQty', e.target.value)}
-                          className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none"
-                          title="Min Kuantitas"
-                        />
+                        <div className="relative">
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            placeholder="Min"
+                            value={t.minQty !== undefined && t.minQty !== null ? t.minQty : ''}
+                            onChange={e => updateTier(index, 'minQty', e.target.value)}
+                            className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none hover:border-slate-300"
+                            title="Kuantitas Minimal (Min Qty)"
+                          />
+                        </div>
                         <span className="text-slate-400 text-xs font-bold">-</span>
-                        {index === tiers.length - 1 ? (
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="number"
-                              min={t.minQty + 1}
-                              placeholder="≥ dst"
-                              value={t.maxQty ?? ''}
-                              onChange={e => updateTier(index, 'maxQty', e.target.value)}
-                              className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none"
-                              title="Kosongkan jika tak terbatas (dan seterusnya)"
-                            />
-                            <span className="text-[10px] text-slate-400 font-sans" title={`Jika dikosongkan berarti ≥ Min Qty ${activeUnit}`}>
-                              {t.maxQty === null ? '(≥ dst)' : activeUnit}
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-1">
-                            <input
-                              type="number"
-                              min={t.minQty + 1}
-                              value={t.maxQty ?? ''}
-                              onChange={e => updateTier(index, 'maxQty', e.target.value)}
-                              className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none"
-                              title="Max Kuantitas"
-                            />
-                            <span className="text-[10px] text-slate-400 font-sans">{activeUnit}</span>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            placeholder={index === tiers.length - 1 ? '≥ dst' : 'Maks'}
+                            value={t.maxQty !== null && t.maxQty !== undefined ? t.maxQty : ''}
+                            onChange={e => updateTier(index, 'maxQty', e.target.value)}
+                            className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none hover:border-slate-300"
+                            title={index === tiers.length - 1 ? "Kuantitas Maksimal (Bisa diisi angka kustom misal 100 atau kosongkan jika tak terbatas)" : "Kuantitas Maksimal (Max Qty)"}
+                          />
+                          <span className="text-[10px] text-slate-400 font-sans" title={t.maxQty === null ? `Tak terbatas (≥ ${t.minQty} ${activeUnit})` : `Hingga ${t.maxQty} ${activeUnit}`}>
+                            {t.maxQty === null && index === tiers.length - 1 ? '(≥ dst)' : activeUnit}
+                          </span>
+                        </div>
                       </div>
                     </td>
 
