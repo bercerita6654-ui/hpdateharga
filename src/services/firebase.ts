@@ -7,6 +7,7 @@ import {
   onAuthStateChanged,
   User
 } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
 import firebaseConfigJson from '../../firebase-applet-config.json';
 
 const firebaseConfig = {
@@ -20,6 +21,7 @@ const firebaseConfig = {
 
 export const firebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(firebaseApp);
+export const db = getFirestore(firebaseApp, (firebaseConfigJson as any).firestoreDatabaseId || '(default)');
 export const googleProvider = new GoogleAuthProvider();
 
 // Request Google Spreadsheets scope so user can directly read/write Google Sheets
