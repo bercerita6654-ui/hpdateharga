@@ -639,24 +639,6 @@ export default function WholesaleTab({
         </div>
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => applyPreset('reseller')}
-            className="px-3 py-1.5 bg-white hover:bg-orange-50 hover:text-orange-700 hover:border-orange-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
-          >
-            🛍️ Reseller Standar (3 Tier)
-          </button>
-          <button
-            onClick={() => applyPreset('dozen')}
-            className="px-3 py-1.5 bg-white hover:bg-orange-50 hover:text-orange-700 hover:border-orange-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
-          >
-            📦 Lusinan / Toko (½ - 2 Lusin)
-          </button>
-          <button
-            onClick={() => applyPreset('bulk')}
-            className="px-3 py-1.5 bg-white hover:bg-orange-50 hover:text-orange-700 hover:border-orange-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
-          >
-            🏭 Partai Besar / B2B (4 Tier)
-          </button>
-          <button
             onClick={() => applyPreset('margin')}
             className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
           >
