@@ -203,20 +203,18 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
       </button>
 
       {authError && (
-        <div className="absolute top-full right-0 sm:left-0 sm:right-auto mt-1.5 w-72 p-2.5 bg-red-50 border border-red-200 text-red-700 text-[11px] rounded-xl shadow-xl z-50 animate-in fade-in">
+        <div className="absolute top-full right-0 sm:left-0 sm:right-auto mt-1.5 w-80 p-3 bg-red-50 border border-red-200 text-red-800 text-[11px] rounded-xl shadow-xl z-50 animate-in fade-in">
           <div className="flex items-start justify-between gap-1.5">
-            <div className="space-y-1">
+            <div className="space-y-1.5 flex-1">
               <span className="font-semibold block">{authError}</span>
-              {isDomainError && (
-                <button
-                  type="button"
-                  onClick={() => setShowDomainModal(true)}
-                  className="mt-1 px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-[10.5px] font-bold flex items-center gap-1 transition-colors cursor-pointer"
-                >
-                  <ShieldAlert className="w-3 h-3" />
-                  <span>Buka Panduan Otorisasi Domain</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setShowDomainModal(true)}
+                className="mt-1 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-[10.5px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+              >
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>Buka Solusi Izin Google / Test Users</span>
+              </button>
             </div>
             <button
               onClick={() => setAuthError(null)}

@@ -7,12 +7,14 @@ import {
   onAuthStateChanged
 } from './firebase';
 import { GoogleAuthProvider } from 'firebase/auth';
+import firebaseConfigJson from '../../firebase-applet-config.json';
 
 export const TARGET_SPREADSHEET_ID = '1CXAjfviAGn9_TCzzJsYIpxMLthF8H6zTynQFftbIM9I';
 
 const CLIENT_ID =
   ((import.meta as any).env?.VITE_GOOGLE_CLIENT_ID as string) ||
-  '878108373232-3isus11771roiomltu0d9kkejp802hf6.apps.googleusercontent.com';
+  firebaseConfigJson.oAuthClientId ||
+  '582127839876-sftm5o1jo1e8i1g9b3mjum64qrmblrv3.apps.googleusercontent.com';
 
 const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
 
