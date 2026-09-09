@@ -43,6 +43,7 @@ import CartProfitMarginChart from './components/CartProfitMarginChart';
 import CartStockDistributionChart from './components/CartStockDistributionChart';
 import TokopediaTab from './components/TokopediaTab';
 import WholesaleTab from './components/WholesaleTab';
+import GoogleAuthButton from './components/GoogleAuthButton';
 
 const PRODUCT_DB_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCxz1GPm7QU9IS1yBiSjvIdNTLUsvvplOCyT_R3XH4O-LuVbHoY_bXn1LTH5lpnlolJ29BhUgEdnFm/pub?gid=1428805476&single=true&output=csv';
 const CATEGORY_DB_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRrRDnJctzeF3FC_-81KzNHZIX3epxC6WwdmIbhXBGl1rlRKvSUfsvsZCZtuiPyULe5b2wJXOIYK8hs/pub?gid=481142784&single=true&output=csv';
@@ -1855,11 +1856,12 @@ export default function App() {
             </button>
           </div>
 
-          <div className="flex items-center gap-2 border-l border-slate-200 pl-4 hidden md:flex">
+          <div className="flex items-center gap-3 md:border-l md:border-slate-200 md:pl-4">
+            <GoogleAuthButton compact={false} />
             {canEditSettings && (
               <button
                 onClick={() => setShowSettings(true)}
-                className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
+                className="p-2.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all hidden md:flex"
                 title="Pengaturan Biaya"
               >
                 <Settings className="w-5 h-5" />

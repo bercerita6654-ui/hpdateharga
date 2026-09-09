@@ -46,3 +46,21 @@ export const formatDateTime = (dateString: string | null | undefined): string =>
     return '-';
   }
 };
+
+/**
+ * Format timestamp in Indonesian format matching user specification:
+ * e.g. "Rabu, 09 Sept 2026 (09:33)"
+ */
+export const formatIndoTimestamp = (d = new Date()): string => {
+  const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sept', 'Okt', 'Nov', 'Des'];
+
+  const dayName = days[d.getDay()];
+  const dateNum = String(d.getDate()).padStart(2, '0');
+  const monthName = months[d.getMonth()];
+  const year = d.getFullYear();
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+
+  return `${dayName}, ${dateNum} ${monthName} ${year} (${hours}:${minutes})`;
+};

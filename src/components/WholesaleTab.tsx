@@ -23,11 +23,29 @@ import {
   AlertCircle,
   Sparkles,
   Calculator,
-  Box
+  Box,
+  FileSpreadsheet,
+  RefreshCw,
+  X,
+  ShoppingCart,
+  ListPlus,
+  CheckCheck,
+  BookmarkCheck,
+  History,
+  Edit3
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Product, Fees } from '../types';
 import { formatIDR, formatInput, parseInput, sanitizeSku } from '../utils/helpers';
+import {
+  appendWholesaleToSpreadsheet,
+  batchAppendWholesaleToSpreadsheet,
+  fetchSpreadsheetExistingSkus,
+  getSavedSkusFromStorage,
+  recordSavedSkus,
+  TARGET_SPREADSHEET_ID
+} from '../services/googleSheetsService';
+import GoogleAuthButton from './GoogleAuthButton';
 
 export interface WholesaleTier {
   id: string;
@@ -35,6 +53,18 @@ export interface WholesaleTier {
   maxQty: number | null; // null represents unbounded (e.g., "12+" or "50+")
   price: number;
 }
+
+export interface WholesaleBasketItem {
+  id: string;
+  sku: string;
+  productName: string;
+  unit: string;
+  normalPrice: number;
+  tiers: WholesaleTier[];
+  addedAt: string;
+}
+
+const BASKET_STORAGE_KEY = 'marp_wholesale_basket';
 
 interface WholesaleTabProps {
   productList: Product[];
@@ -93,6 +123,61 @@ export default function WholesaleTab({
   // Toast / copy feedback
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string>('');
+
+  // Google Sheets integration state
+  const [isSavingToSheets, setIsSavingToSheets] = useState<boolean>(false);
+  const [sheetsModalData, setSheetsModalData] = useState<{
+    show: boolean;
+    success?: boolean;
+    message?: string;
+    url?: string;
+    rowPreview?: string[];
+    rowNumber?: number;
+  } | null>(null);
+
+  // SKUs that have been saved to spreadsheet / previously created
+  const [savedSkus, setSavedSkus] = useState<string[]>(() => getSavedSkusFromStorage());
+
+  // Wholesale Basket state (Antrean / Keranjang Grosir)
+  const [wholesaleBasket, setWholesaleBasket] = useState<WholesaleBasketItem[]>(() => {
+    try {
+      const raw = localStorage.getItem(BASKET_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [isBasketModalOpen, setIsBasketModalOpen] = useState<boolean>(false);
+  const [isSavingBatch, setIsSavingBatch] = useState<boolean>(false);
+  const [batchResultModal, setBatchResultModal] = useState<{
+    show: boolean;
+    success?: boolean;
+    message?: string;
+    url?: string;
+    startRow?: number;
+    endRow?: number;
+    count?: number;
+    savedSkus?: string[];
+  } | null>(null);
+
+  // Sync saved SKUs from Google Spreadsheet on mount
+  useEffect(() => {
+    fetchSpreadsheetExistingSkus().then(skus => {
+      if (skus && skus.length > 0) {
+        setSavedSkus(skus);
+      }
+    });
+  }, []);
+
+  // Sync basket to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(BASKET_STORAGE_KEY, JSON.stringify(wholesaleBasket));
+    } catch (e) {
+      console.warn('Failed to save basket to localStorage', e);
+    }
+  }, [wholesaleBasket]);
 
   // Satuan / Unit Produk (pcs, rim, roll, dll)
   const [selectedUnit, setSelectedUnit] = useState<string>('pcs');
@@ -582,6 +667,195 @@ export default function WholesaleTab({
     }, 2000);
   };
 
+  // Helper to check if a SKU is already saved in spreadsheet
+  const isSkuSavedInSheet = (sku: string) => {
+    if (!sku || sku === '-') return false;
+    const clean = sanitizeSku(sku);
+    return savedSkus.some(s => sanitizeSku(s) === clean);
+  };
+
+  // Helper to check if a SKU is currently in the basket
+  const isSkuInBasket = (sku: string) => {
+    if (!sku || sku === '-') return false;
+    const clean = sanitizeSku(sku);
+    return wholesaleBasket.some(item => sanitizeSku(item.sku) === clean);
+  };
+
+  // Add current configuration to basket
+  const handleAddToBasket = () => {
+    if (!normalPrice || normalPrice <= 0) {
+      showToast('Tentukan harga jual normal terlebih dahulu');
+      return;
+    }
+    if (tiers.length === 0) {
+      showToast('Tambahkan minimal 1 tier harga grosir');
+      return;
+    }
+
+    const currentSku = selectedSku || activeProduct?.sku || '';
+    const currentName = activeProduct?.name || (currentSku ? `Produk ${currentSku}` : 'PRODUK GROSIR');
+
+    const newItem: WholesaleBasketItem = {
+      id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
+      sku: currentSku,
+      productName: currentName,
+      unit: activeUnit,
+      normalPrice: normalPrice,
+      tiers: JSON.parse(JSON.stringify(tiers)),
+      addedAt: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+    };
+
+    setWholesaleBasket(prev => {
+      // If SKU exists, update it, otherwise add new
+      if (currentSku && currentSku !== '-') {
+        const existingIdx = prev.findIndex(item => sanitizeSku(item.sku) === sanitizeSku(currentSku));
+        if (existingIdx !== -1) {
+          const clone = [...prev];
+          clone[existingIdx] = newItem;
+          showToast(`Perubahan skema harga ${currentSku} diperbarui di keranjang!`);
+          return clone;
+        }
+      }
+      const next = [...prev, newItem];
+      showToast(`Produk ${currentSku || 'Grosir'} berhasil dimasukkan ke keranjang! (${next.length} item siap disimpan)`);
+      return next;
+    });
+  };
+
+  // Remove from basket
+  const handleRemoveFromBasket = (id: string) => {
+    setWholesaleBasket(prev => prev.filter(item => item.id !== id));
+    showToast('Produk dihapus dari keranjang grosir');
+  };
+
+  // Clear basket
+  const handleClearBasket = () => {
+    if (window.confirm('Kosongkan semua produk dari keranjang grosir?')) {
+      setWholesaleBasket([]);
+      showToast('Keranjang grosir dikosongkan');
+    }
+  };
+
+  // Load item from basket into editor
+  const handleLoadItemFromBasket = (item: WholesaleBasketItem) => {
+    if (item.sku) {
+      setSelectedSkuInternal(item.sku);
+      setSearchQuery(`${item.sku} - ${item.productName}`);
+    }
+    setManualNormalPrice(String(item.normalPrice));
+    setSelectedUnit(item.unit || 'pcs');
+    if (item.tiers && item.tiers.length > 0) {
+      setTiers(item.tiers);
+    }
+    setIsBasketModalOpen(false);
+    showToast(`Data produk ${item.sku || item.productName} dimuat ke editor.`);
+  };
+
+  // Batch Save all items in basket to Google Spreadsheet
+  const handleBatchSaveToSpreadsheet = async () => {
+    if (wholesaleBasket.length === 0) {
+      showToast('Keranjang grosir kosong. Tambahkan produk terlebih dahulu.');
+      return;
+    }
+
+    setIsSavingBatch(true);
+    try {
+      const payloads = wholesaleBasket.map(item => ({
+        sku: item.sku,
+        productName: item.productName,
+        unit: item.unit,
+        normalPrice: item.normalPrice,
+        tiers: item.tiers
+      }));
+
+      const res = await batchAppendWholesaleToSpreadsheet(payloads);
+
+      // Add saved SKUs to state and storage
+      const newlySavedSkus = payloads.map(p => p.sku).filter(Boolean);
+      recordSavedSkus(newlySavedSkus);
+      setSavedSkus(prev => Array.from(new Set([...prev, ...newlySavedSkus])));
+
+      // Clear basket
+      setWholesaleBasket([]);
+
+      // Show result modal
+      setBatchResultModal({
+        show: true,
+        success: true,
+        message: `${res.count} produk grosir berhasil tersimpan sekaligus di Baris ${res.startRow} s/d ${res.endRow} Google Spreadsheet!`,
+        url: res.spreadsheetUrl,
+        startRow: res.startRow,
+        endRow: res.endRow,
+        count: res.count,
+        savedSkus: newlySavedSkus
+      });
+
+      showToast(`Sukses! ${res.count} produk tersimpan di Baris ${res.startRow}-${res.endRow} Spreadsheet.`);
+    } catch (err: any) {
+      console.error('Error batch saving to Google Sheets:', err);
+      const errMsg = err?.message || 'Gagal menyimpan batch ke Google Spreadsheet';
+      setBatchResultModal({
+        show: true,
+        success: false,
+        message: errMsg
+      });
+      showToast(errMsg);
+    } finally {
+      setIsSavingBatch(false);
+    }
+  };
+
+  // Simpan skema harga bertingkat ke Google Spreadsheet (Single)
+  const handleSaveToSpreadsheet = async () => {
+    if (!normalPrice || normalPrice <= 0) {
+      showToast('Tentukan harga jual normal terlebih dahulu');
+      return;
+    }
+    if (tiers.length === 0) {
+      showToast('Tambahkan minimal 1 tier harga grosir');
+      return;
+    }
+
+    const currentSku = selectedSku || activeProduct?.sku || '';
+    const currentName = activeProduct?.name || (currentSku ? `Produk ${currentSku}` : 'PRODUK GROSIR');
+
+    setIsSavingToSheets(true);
+    try {
+      const res = await appendWholesaleToSpreadsheet({
+        sku: currentSku,
+        productName: currentName,
+        unit: activeUnit,
+        normalPrice: normalPrice,
+        tiers: tiers
+      });
+
+      if (currentSku) {
+        setSavedSkus(prev => Array.from(new Set([...prev, currentSku])));
+      }
+
+      setSheetsModalData({
+        show: true,
+        success: true,
+        message: `Skema harga grosir berhasil tersimpan di Baris ${res.rowNumber} Google Spreadsheet!`,
+        url: res.spreadsheetUrl,
+        rowPreview: res.rowData,
+        rowNumber: res.rowNumber
+      });
+      showToast(`Berhasil disimpan di Baris ${res.rowNumber} Google Spreadsheet!`);
+    } catch (err: any) {
+      console.error('Error saving to Google Sheets:', err);
+      const errMsg = err?.message || 'Gagal menyimpan ke Google Spreadsheet';
+      setSheetsModalData({
+        show: true,
+        success: false,
+        message: errMsg
+      });
+      showToast(errMsg);
+    } finally {
+      setIsSavingToSheets(false);
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       {/* TOAST NOTIFICATION */}
@@ -617,6 +891,47 @@ export default function WholesaleTab({
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2 flex-wrap">
+          <GoogleAuthButton compact={true} />
+
+          {/* KERANJANG GROSIR (BATCH QUEUE) BUTTON */}
+          <button
+            onClick={() => setIsBasketModalOpen(true)}
+            className="relative px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white border border-indigo-700 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+            title="Buka daftar produk dalam antrean keranjang grosir untuk disimpan sekaligus"
+          >
+            <ShoppingCart className="w-3.5 h-3.5" />
+            <span>Keranjang Grosir</span>
+            {wholesaleBasket.length > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 bg-amber-400 text-slate-900 text-[10px] font-black rounded-full">
+                {wholesaleBasket.length}
+              </span>
+            )}
+          </button>
+
+          {/* + MASUK KERANJANG BUTTON */}
+          <button
+            onClick={handleAddToBasket}
+            className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Tambahkan konfigurasi harga grosir produk ini ke keranjang antrean"
+          >
+            <ListPlus className="w-3.5 h-3.5" />
+            <span>+ Masuk Keranjang</span>
+          </button>
+
+          <button
+            onClick={handleSaveToSpreadsheet}
+            disabled={isSavingToSheets}
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-700 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer disabled:opacity-60"
+            title={`Simpan langsung ke Google Spreadsheet (${TARGET_SPREADSHEET_ID})`}
+          >
+            {isSavingToSheets ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+            )}
+            <span>{isSavingToSheets ? 'Menyimpan...' : 'Simpan ke Sheet'}</span>
+          </button>
+
           <button
             onClick={exportToExcel}
             className="px-3.5 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -708,38 +1023,91 @@ export default function WholesaleTab({
                       Tutup
                     </button>
                   </div>
-                  {dropdownFilteredProducts.map(p => (
-                    <div
-                      key={p.sku}
-                      onClick={() => {
-                        setSelectedSkuInternal(p.sku);
-                        const autoPrice = calculateAutoPrice(p.eceran || 0, rounding);
-                        setManualNormalPrice(String(autoPrice));
-                        setSelectedUnit(p.unit || 'pcs');
-                        setSearchQuery(`${p.sku} - ${p.name}`);
-                        setShowDropdown(false);
-                        showToast(`Produk ${p.sku} terpilih (${(p.unit || 'pcs').toUpperCase()}) - Harga Jual Satuan otomatis: Rp ${formatInput(autoPrice)}`);
-                      }}
-                      className={`p-2.5 hover:bg-orange-50/70 cursor-pointer flex items-center justify-between text-xs transition-colors ${
-                        selectedSku === p.sku ? 'bg-orange-50 font-bold' : ''
-                      }`}
-                    >
-                      <div className="truncate pr-3">
-                        <span className="font-mono font-bold text-orange-600 mr-2">{p.sku}</span>
-                        <span className="text-slate-700">{p.name}</span>
-                        <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-bold uppercase">
-                          {p.unit || 'pcs'}
-                        </span>
+                  {dropdownFilteredProducts.map(p => {
+                    const isSaved = isSkuSavedInSheet(p.sku);
+                    const inBasket = isSkuInBasket(p.sku);
+                    return (
+                      <div
+                        key={p.sku}
+                        onClick={() => {
+                          setSelectedSkuInternal(p.sku);
+                          const autoPrice = calculateAutoPrice(p.eceran || 0, rounding);
+                          setManualNormalPrice(String(autoPrice));
+                          setSelectedUnit(p.unit || 'pcs');
+                          setSearchQuery(`${p.sku} - ${p.name}`);
+                          setShowDropdown(false);
+                          showToast(`Produk ${p.sku} terpilih (${(p.unit || 'pcs').toUpperCase()}) - Harga Jual Satuan otomatis: Rp ${formatInput(autoPrice)}`);
+                        }}
+                        className={`p-2.5 hover:bg-orange-50/70 cursor-pointer flex items-center justify-between text-xs transition-colors ${
+                          selectedSku === p.sku ? 'bg-orange-50 font-bold' : ''
+                        }`}
+                      >
+                        <div className="truncate pr-3">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono font-bold text-orange-600">{p.sku}</span>
+                            <span className="text-slate-700">{p.name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 font-bold uppercase">
+                              {p.unit || 'pcs'}
+                            </span>
+                            {isSaved && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold flex items-center gap-0.5" title="Sudah pernah dibuat & tersimpan di Google Spreadsheet">
+                                <Check className="w-2.5 h-2.5" /> Di Sheet
+                              </span>
+                            )}
+                            {inBasket && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-bold flex items-center gap-0.5" title="Ada dalam antrean keranjang grosir">
+                                <ShoppingCart className="w-2.5 h-2.5" /> Di Keranjang
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <div className="font-mono font-bold text-slate-800">{formatIDR(p.eceran)} / {p.unit || 'pcs'}</div>
+                          <div className="text-[10px] text-slate-400">HPP: {formatIDR(p.hpp)}</div>
+                        </div>
                       </div>
-                      <div className="text-right flex-shrink-0">
-                        <div className="font-mono font-bold text-slate-800">{formatIDR(p.eceran)} / {p.unit || 'pcs'}</div>
-                        <div className="text-[10px] text-slate-400">HPP: {formatIDR(p.hpp)}</div>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
+
+            {/* STATUS BADGE / INDICATOR FOR SELECTED SKU */}
+            {selectedSku && (
+              <div className="mt-2 space-y-1.5">
+                {isSkuSavedInSheet(selectedSku) && (
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center justify-between shadow-xs">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-bold">Status SKU {selectedSku}:</span>{' '}
+                        <span className="text-emerald-800">Sudah pernah dibuat &amp; tersimpan di Google Spreadsheet.</span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold bg-emerald-200/80 text-emerald-900 px-2 py-0.5 rounded-full">
+                      ✓ Sudah di Sheet
+                    </span>
+                  </div>
+                )}
+                {isSkuInBasket(selectedSku) && (
+                  <div className="p-2.5 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-900 flex items-center justify-between shadow-xs">
+                    <div className="flex items-center gap-2">
+                      <ShoppingCart className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <div>
+                        <span className="font-bold">Status SKU {selectedSku}:</span>{' '}
+                        <span className="text-indigo-800">Ada di antrean Keranjang Grosir ({wholesaleBasket.length} item).</span>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setIsBasketModalOpen(true)}
+                      className="text-[10px] font-bold bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Buka Keranjang
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* HARGA JUAL SATUAN & RUMUS OTOMATIS */}
@@ -1179,6 +1547,38 @@ export default function WholesaleTab({
                 )}
                 <span>{copiedKey === 'all_shopee_table' ? 'Tersalin ke Clipboard!' : 'Salin Skema Grosir'}</span>
               </button>
+
+              <button
+                onClick={handleAddToBasket}
+                className="px-3.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer ml-1.5"
+                title="Tambahkan konfigurasi harga grosir produk ini ke antrean keranjang"
+              >
+                <ListPlus className="w-4 h-4 text-indigo-600" />
+                <span>+ Masuk Keranjang</span>
+              </button>
+
+              <button
+                onClick={() => setIsBasketModalOpen(true)}
+                className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer ml-1.5"
+                title="Buka keranjang grosir untuk simpan sekaligus"
+              >
+                <ShoppingCart className="w-4 h-4 text-white" />
+                <span>Keranjang ({wholesaleBasket.length})</span>
+              </button>
+
+              <button
+                onClick={handleSaveToSpreadsheet}
+                disabled={isSavingToSheets}
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-700 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer ml-1.5 disabled:opacity-60"
+                title={`Simpan langsung ke Google Spreadsheet (${TARGET_SPREADSHEET_ID})`}
+              >
+                {isSavingToSheets ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <FileSpreadsheet className="w-4 h-4 text-white" />
+                )}
+                <span>{isSavingToSheets ? 'Menyimpan...' : 'Simpan ke Spreadsheet'}</span>
+              </button>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
               Sesuaikan kuantitas (Min - Max Qty) dan tentukan harga grosir satuan. Sistem otomatis menghitung potongan Shopee Star+ dan validasi kepatuhan.
@@ -1601,6 +2001,445 @@ export default function WholesaleTab({
         </div>
 
       </div>
+
+      {/* GOOGLE SPREADSHEET RESULT MODAL */}
+      {sheetsModalData?.show && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-xl ${sheetsModalData.success ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                  {sheetsModalData.success ? (
+                    <FileSpreadsheet className="w-5 h-5" />
+                  ) : (
+                    <AlertCircle className="w-5 h-5" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-800">
+                    {sheetsModalData.success ? 'Berhasil Disimpan ke Google Spreadsheet' : 'Gagal Menyimpan ke Google Spreadsheet'}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-mono">
+                    ID Sheet: {TARGET_SPREADSHEET_ID}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSheetsModalData(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+              {sheetsModalData.success ? (
+                <>
+                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-start gap-2.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-semibold">{sheetsModalData.message}</p>
+                      <p className="text-emerald-700 mt-0.5">
+                        Data berhasil dimasukkan langsung ke Baris {sheetsModalData.rowNumber || 'tersedia'} di tab <strong>Harga Grosir</strong> pada lembar spreadsheet Anda.
+                      </p>
+                    </div>
+                  </div>
+
+                  {sheetsModalData.rowPreview && sheetsModalData.rowPreview.length > 0 && (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden">
+                      <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 text-xs font-bold text-slate-700 flex justify-between items-center">
+                        <span>Format Baris Data yang Tersimpan:</span>
+                        {sheetsModalData.rowNumber && (
+                          <span className="text-[11px] font-mono font-semibold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                            Baris #{sheetsModalData.rowNumber}
+                          </span>
+                        )}
+                      </div>
+                      <div className="divide-y divide-slate-100 text-xs">
+                        <div className="grid grid-cols-3 p-2.5 hover:bg-slate-50/50">
+                          <span className="text-slate-500 font-medium">Kolom 1 (Hari Tanggal/Waktu)</span>
+                          <span className="col-span-2 font-semibold text-slate-800">{sheetsModalData.rowPreview[0]}</span>
+                        </div>
+                        <div className="grid grid-cols-3 p-2.5 hover:bg-slate-50/50">
+                          <span className="text-slate-500 font-medium">Kolom 2 (SKU)</span>
+                          <span className="col-span-2 font-mono font-bold text-slate-800">{sheetsModalData.rowPreview[1]}</span>
+                        </div>
+                        <div className="grid grid-cols-3 p-2.5 hover:bg-slate-50/50">
+                          <span className="text-slate-500 font-medium">Kolom 3 (Nama Produk)</span>
+                          <span className="col-span-2 font-bold text-slate-800">{sheetsModalData.rowPreview[2]}</span>
+                        </div>
+                        <div className="grid grid-cols-3 p-2.5 hover:bg-slate-50/50">
+                          <span className="text-slate-500 font-medium">Kolom 4 (UNIT)</span>
+                          <span className="col-span-2 font-semibold text-slate-800">{sheetsModalData.rowPreview[3]}</span>
+                        </div>
+                        <div className="grid grid-cols-3 p-2.5 hover:bg-slate-50/50">
+                          <span className="text-slate-500 font-medium">Kolom 5 (Harga Satuan)</span>
+                          <span className="col-span-2 font-bold text-blue-700">{sheetsModalData.rowPreview[4]}</span>
+                        </div>
+                        <div className="grid grid-cols-3 p-2.5 hover:bg-slate-50/50">
+                          <span className="text-slate-500 font-medium">Kolom 6 (Harga Tier 1)</span>
+                          <span className="col-span-2 font-semibold text-slate-800">{sheetsModalData.rowPreview[5] || '-'}</span>
+                        </div>
+                        <div className="grid grid-cols-3 p-2.5 hover:bg-slate-50/50">
+                          <span className="text-slate-500 font-medium">Kolom 7 (Harga Tier 2)</span>
+                          <span className="col-span-2 font-semibold text-slate-800">{sheetsModalData.rowPreview[6] || '-'}</span>
+                        </div>
+                        <div className="grid grid-cols-3 p-2.5 hover:bg-slate-50/50">
+                          <span className="text-slate-500 font-medium">Kolom 8 (Harga Tier 3)</span>
+                          <span className="col-span-2 font-semibold text-slate-800">{sheetsModalData.rowPreview[7] || '-'}</span>
+                        </div>
+                        <div className="grid grid-cols-3 p-2.5 hover:bg-slate-50/50">
+                          <span className="text-slate-500 font-medium">Kolom 9 & 10 (Checklist)</span>
+                          <span className="col-span-2 font-mono text-slate-600">FALSE, FALSE</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="space-y-3">
+                  <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-semibold">Terjadi kendala saat menyimpan:</p>
+                      <p className="mt-1 font-mono text-[11px] bg-white/70 p-2 rounded border border-red-100 break-all">
+                        {sheetsModalData.message}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1.5">
+                    <p className="font-bold text-slate-700">Panduan Mengatasi:</p>
+                    <ul className="list-disc pl-4 space-y-1">
+                      <li>Pastikan Anda mengizinkan pop-up otentikasi Google pada browser Anda.</li>
+                      <li>Pilih akun Google yang memiliki hak akses edit pada spreadsheet target.</li>
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2.5">
+              {sheetsModalData.success ? (
+                <>
+                  <button
+                    onClick={() => setSheetsModalData(null)}
+                    className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Tutup
+                  </button>
+                  {sheetsModalData.url && (
+                    <a
+                      href={sheetsModalData.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Buka Google Spreadsheet</span>
+                    </a>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setSheetsModalData(null)}
+                    className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Tutup
+                  </button>
+                  <GoogleAuthButton compact={true} />
+                  <button
+                    onClick={() => {
+                      setSheetsModalData(null);
+                      handleSaveToSpreadsheet();
+                    }}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Coba Lagi</span>
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* KERANJANG GROSIR (BATCH QUEUE) MODAL */}
+      {isBasketModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-indigo-50/50">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-indigo-600 text-white shadow-xs">
+                  <ShoppingCart className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-base text-slate-800">
+                      Keranjang Antrean Harga Grosir
+                    </h3>
+                    <span className="px-2 py-0.5 text-[11px] font-black rounded-full bg-indigo-100 text-indigo-800">
+                      {wholesaleBasket.length} Produk
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Kumpulkan skema harga berbagai produk lalu simpan sekaligus ke Spreadsheet ({TARGET_SPREADSHEET_ID})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsBasketModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 overflow-y-auto flex-1 space-y-4">
+              {wholesaleBasket.length === 0 ? (
+                <div className="text-center py-12 px-4 space-y-3">
+                  <div className="w-16 h-16 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mx-auto">
+                    <ShoppingCart className="w-8 h-8" />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="font-bold text-slate-700 text-sm">Keranjang Grosir Masih Kosong</h4>
+                    <p className="text-xs text-slate-500 max-w-md mx-auto">
+                      Pilih produk di katalog atau atur harga di form, lalu klik tombol <strong className="text-indigo-600">+ Masuk Keranjang</strong> untuk menambahkan produk ke antrean ini.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setIsBasketModalOpen(false)}
+                    className="mt-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer"
+                  >
+                    Kembali ke Editor
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+                    <span>Daftar produk yang siap disimpan:</span>
+                    <button
+                      onClick={handleClearBasket}
+                      className="text-red-500 hover:text-red-700 font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Kosongkan Semua</span>
+                    </button>
+                  </div>
+
+                  {/* List of items in Basket */}
+                  <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
+                    {wholesaleBasket.map((item, idx) => (
+                      <div
+                        key={item.id}
+                        className="p-4 hover:bg-slate-50/70 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-3"
+                      >
+                        <div className="space-y-1.5 min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-bold text-slate-400">#{idx + 1}</span>
+                            <span className="font-mono font-bold text-orange-600 text-xs bg-orange-50 px-2 py-0.5 rounded border border-orange-200">
+                              {item.sku || 'TANPA SKU'}
+                            </span>
+                            <span className="font-bold text-xs text-slate-800 truncate max-w-xs">
+                              {item.productName}
+                            </span>
+                            <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded uppercase">
+                              {item.unit || 'pcs'}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              Ditambahkan {item.addedAt}
+                            </span>
+                          </div>
+
+                          {/* Tiers Preview */}
+                          <div className="flex items-center gap-2 flex-wrap text-xs">
+                            <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
+                              Harga Satuan: <strong className="text-blue-700">{formatIDR(item.normalPrice)}</strong>
+                            </span>
+                            {item.tiers.map((t, tIdx) => (
+                              <span
+                                key={t.id}
+                                className="text-[11px] bg-amber-50 text-amber-900 border border-amber-200 px-2 py-0.5 rounded font-medium"
+                              >
+                                T{tIdx + 1} ({t.minQty}{t.maxQty ? `-${t.maxQty}` : '+'} {item.unit}):{' '}
+                                <strong className="font-bold text-amber-950">{formatIDR(t.price)}</strong>
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Actions per item */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleLoadItemFromBasket(item)}
+                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer"
+                            title="Muat data produk ini ke editor untuk diperiksa / diubah"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Edit</span>
+                          </button>
+                          <button
+                            onClick={() => handleRemoveFromBasket(item.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                            title="Hapus dari antrean"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="text-xs text-slate-500 flex items-center gap-1.5">
+                <Info className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span>Semua baris akan ditulis berurutan langsung ke kolom A-J sheet <strong>Harga Grosir</strong>.</span>
+              </div>
+              <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+                <button
+                  onClick={() => setIsBasketModalOpen(false)}
+                  className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Tutup
+                </button>
+                <button
+                  onClick={handleBatchSaveToSpreadsheet}
+                  disabled={isSavingBatch || wholesaleBasket.length === 0}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm transition-all active:scale-95 cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingBatch ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <FileSpreadsheet className="w-4 h-4" />
+                  )}
+                  <span>
+                    {isSavingBatch
+                      ? 'Menyimpan Semua...'
+                      : `Simpan Semua (${wholesaleBasket.length} Produk) ke Spreadsheet`}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* BATCH SAVE SUCCESS / ERROR MODAL */}
+      {batchResultModal?.show && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-xl overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-emerald-50/70">
+              <div className="flex items-center gap-3">
+                <div className={`p-2.5 rounded-xl ${batchResultModal.success ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
+                  {batchResultModal.success ? (
+                    <CheckCheck className="w-5 h-5" />
+                  ) : (
+                    <AlertTriangle className="w-5 h-5" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-slate-800">
+                    {batchResultModal.success ? 'Batch Grosir Berhasil Disimpan!' : 'Gagal Menyimpan Batch'}
+                  </h3>
+                  <p className="text-xs text-slate-500 font-mono">
+                    ID Sheet: {TARGET_SPREADSHEET_ID}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setBatchResultModal(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4">
+              {batchResultModal.success ? (
+                <div className="space-y-4">
+                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center gap-3">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <div>
+                      <p className="font-bold text-sm">
+                        {batchResultModal.count} Produk Grosir Berhasil Ditambahkan
+                      </p>
+                      <p className="text-emerald-800 mt-0.5">
+                        Tercatat di Google Spreadsheet pada <strong>Baris {batchResultModal.startRow} s/d {batchResultModal.endRow}</strong> sheet <em>Harga Grosir</em>.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* List of saved SKUs */}
+                  {batchResultModal.savedSkus && batchResultModal.savedSkus.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-xs font-bold text-slate-700 block">
+                        SKU yang Berhasil Disimpan:
+                      </span>
+                      <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+                        {batchResultModal.savedSkus.map((sku, i) => (
+                          <span
+                            key={i}
+                            className="font-mono text-xs font-bold bg-white text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-md flex items-center gap-1 shadow-2xs"
+                          >
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            {sku}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-semibold">Terjadi kendala saat menyimpan batch:</p>
+                      <p className="mt-1 font-mono text-[11px] bg-white/70 p-2 rounded border border-red-100 break-all">
+                        {batchResultModal.message}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end gap-2.5">
+              <button
+                onClick={() => setBatchResultModal(null)}
+                className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Tutup
+              </button>
+              {batchResultModal.url && (
+                <a
+                  href={batchResultModal.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Buka Google Spreadsheet</span>
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
