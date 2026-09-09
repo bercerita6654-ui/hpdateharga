@@ -44,6 +44,7 @@ import ShopeeTab from './components/ShopeeTab';
 import CartProfitMarginChart from './components/CartProfitMarginChart';
 import CartStockDistributionChart from './components/CartStockDistributionChart';
 import TokopediaTab from './components/TokopediaTab';
+import WholesaleTab from './components/WholesaleTab';
 
 const PRODUCT_DB_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCxz1GPm7QU9IS1yBiSjvIdNTLUsvvplOCyT_R3XH4O-LuVbHoY_bXn1LTH5lpnlolJ29BhUgEdnFm/pub?gid=1428805476&single=true&output=csv';
 const CATEGORY_DB_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRrRDnJctzeF3FC_-81KzNHZIX3epxC6WwdmIbhXBGl1rlRKvSUfsvsZCZtuiPyULe5b2wJXOIYK8hs/pub?gid=481142784&single=true&output=csv';
@@ -201,7 +202,7 @@ export default function App() {
 
   const [serverDrafts, setServerDrafts] = useState<Record<string, any>>({});
   const [expandedSubmissionId, setExpandedSubmissionId] = useState<string | number | null>(null);
-  const [activeView, setActiveView] = useState<'calculator' | 'competitor' | 'inbox' | 'history' | 'shopee' | 'gomall_shopee' | 'tokopedia'>('calculator');
+  const [activeView, setActiveView] = useState<'calculator' | 'competitor' | 'inbox' | 'history' | 'shopee' | 'gomall_shopee' | 'tokopedia' | 'wholesale'>('calculator');
   const [displayLimit, setDisplayLimit] = useState(100);
 
   const [fees, setFees] = useState<Fees>(() => {
@@ -211,6 +212,9 @@ export default function App() {
         const parsed = JSON.parse(localFees);
         if (parsed.campaignFee === undefined) {
           parsed.campaignFee = 5.0;
+        }
+        if (parsed.hematBiayaKirim === undefined) {
+          parsed.hematBiayaKirim = 510;
         }
         return parsed;
       }
@@ -224,8 +228,9 @@ export default function App() {
       jubelioProcessingFee: 350,
       insurance: 0.5,
       packingFee: 1000,
-      komisiAMS: 2.0,
-      campaignFee: 5.0
+      komisiAMS: 1.0,
+      campaignFee: 5.0,
+      hematBiayaKirim: 510
     };
   });
 
@@ -1650,6 +1655,21 @@ export default function App() {
                     <span className="absolute right-3 top-2 text-slate-400 text-sm">%</span>
                   </div>
                 </div>
+                <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1.5">Hemat Biaya Kirim</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      className="w-full p-2 pl-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all font-mono"
+                      value={formatInput(fees.hematBiayaKirim !== undefined ? fees.hematBiayaKirim : 510)}
+                      onChange={e => {
+                        const parsed = parseInput(e.target.value);
+                        setFees({ ...fees, hematBiayaKirim: parsed === '' ? 0 : Number(parsed) });
+                      }}
+                    />
+                    <span className="absolute right-3 top-2 text-slate-400 text-xs font-bold">Rp</span>
+                  </div>
+                </div>
                   <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm col-span-2">
                     <label className="block text-[11px] font-semibold text-slate-600 mb-1.5 flex justify-between">
                       <span>Biaya Campaign (Promosi)</span>
@@ -1724,10 +1744,13 @@ export default function App() {
                   <div className="relative">
                     <span className="absolute left-3 top-2 text-slate-400 text-sm">Rp</span>
                     <input
-                      type="number"
+                      type="text"
                       className="w-full p-2 pl-8 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all font-mono"
-                      value={fees.marketplaceProcessingFee}
-                      onChange={e => setFees({ ...fees, marketplaceProcessingFee: Number(e.target.value) })}
+                      value={formatInput(fees.marketplaceProcessingFee)}
+                      onChange={e => {
+                        const parsed = parseInput(e.target.value);
+                        setFees({ ...fees, marketplaceProcessingFee: parsed === '' ? 0 : Number(parsed) });
+                      }}
                     />
                   </div>
                 </div>
@@ -1736,10 +1759,13 @@ export default function App() {
                   <div className="relative">
                     <span className="absolute left-3 top-2 text-slate-400 text-sm">Rp</span>
                     <input
-                      type="number"
+                      type="text"
                       className="w-full p-2 pl-8 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all font-mono"
-                      value={fees.jubelioProcessingFee}
-                      onChange={e => setFees({ ...fees, jubelioProcessingFee: Number(e.target.value) })}
+                      value={formatInput(fees.jubelioProcessingFee)}
+                      onChange={e => {
+                        const parsed = parseInput(e.target.value);
+                        setFees({ ...fees, jubelioProcessingFee: parsed === '' ? 0 : Number(parsed) });
+                      }}
                     />
                   </div>
                 </div>
@@ -1748,10 +1774,13 @@ export default function App() {
                   <div className="relative">
                     <span className="absolute left-3 top-2 text-slate-400 text-sm">Rp</span>
                     <input
-                      type="number"
+                      type="text"
                       className="w-full p-2 pl-8 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all font-mono"
-                      value={fees.packingFee}
-                      onChange={e => setFees({ ...fees, packingFee: Number(e.target.value) })}
+                      value={formatInput(fees.packingFee)}
+                      onChange={e => {
+                        const parsed = parseInput(e.target.value);
+                        setFees({ ...fees, packingFee: parsed === '' ? 0 : Number(parsed) });
+                      }}
                     />
                   </div>
                 </div>
@@ -1883,6 +1912,17 @@ export default function App() {
             >
               <span className={`w-1.5 h-1.5 rounded-full ${activeView === 'tokopedia' ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
               Tokopedia
+            </button>
+            <button
+              onClick={() => setActiveView('wholesale')}
+              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+                activeView === 'wholesale'
+                  ? 'bg-white border border-orange-400 shadow-sm text-orange-700 font-bold'
+                  : 'text-slate-500 hover:text-orange-700 hover:bg-slate-100/50'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${activeView === 'wholesale' ? 'bg-orange-500' : 'bg-slate-400'}`}></span>
+              Harga Grosir
             </button>
           </div>
 
@@ -2742,6 +2782,17 @@ export default function App() {
             skuCategoryMap={skuCategoryMap}
             onRefresh={fetchCsvData}
             isLoading={isLoading}
+          />
+        )}
+
+        {activeView === 'wholesale' && (
+          <WholesaleTab
+            productList={productList}
+            fees={fees}
+            setSelectedSku={setSelectedSku}
+            setProduct={setProduct}
+            setActiveView={setActiveView}
+            rounding={rounding}
           />
         )}
 

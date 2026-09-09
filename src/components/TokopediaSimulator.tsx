@@ -12,7 +12,7 @@ import {
   Minus
 } from 'lucide-react';
 import { Product } from '../types';
-import { formatIDR } from '../utils/helpers';
+import { formatIDR, formatInput, parseInput } from '../utils/helpers';
 
 export const calculateTokopediaPrice = (
   eceran: number,
@@ -224,12 +224,12 @@ export default function TokopediaSimulator({
                 <div className="relative">
                   <span className="absolute left-3.5 top-3 text-slate-400 font-bold text-sm">Rp</span>
                   <input
-                    type="number"
-                    min="0"
-                    placeholder="Contoh: 100000"
-                    value={manualEceran !== '' ? manualEceran : (activeSingleProduct ? activeSingleProduct.eceran : '')}
+                    type="text"
+                    placeholder="Contoh: 100.000"
+                    value={manualEceran !== '' ? formatInput(manualEceran) : (activeSingleProduct ? formatInput(activeSingleProduct.eceran) : '')}
                     onChange={e => {
-                      setManualEceran(e.target.value);
+                      const parsed = parseInput(e.target.value);
+                      setManualEceran(parsed === '' ? '' : String(parsed));
                       if (selectedProductSku) setSelectedProductSku('');
                     }}
                     className="w-full pl-11 pr-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all shadow-inner"

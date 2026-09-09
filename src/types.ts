@@ -79,4 +79,5 @@ export interface Fees {
   packingFee: number;
   komisiAMS: number;
   campaignFee: number;
+  hematBiayaKirim?: number;
 }
