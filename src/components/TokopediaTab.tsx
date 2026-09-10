@@ -74,7 +74,7 @@ export default function TokopediaTab({
   const [tableSearch, setTableSearch] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [stockFilter, setStockFilter] = useState<'all' | 'in_stock' | 'out_of_stock'>('all');
-  const [sortBy, setSortBy] = useState<'sku' | 'name' | 'eceran_asc' | 'eceran_desc' | 'tokopedia_desc'>('name');
+  const [sortBy, setSortBy] = useState<'input_order' | 'sku' | 'name' | 'eceran_asc' | 'eceran_desc' | 'tokopedia_desc'>('name');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(20);
 
@@ -178,6 +178,18 @@ export default function TokopediaTab({
     });
   }, [productList, adminPercent, fixedFee, rounding, skuCategoryMap]);
 
+  // Lookup map for input order when bulk filter is active
+  const bulkOrderMap = useMemo(() => {
+    const map = new Map<string, number>();
+    activeBulkSkus.forEach((sku, idx) => {
+      const clean = sku.toLowerCase().trim();
+      if (!map.has(clean)) {
+        map.set(clean, idx);
+      }
+    });
+    return map;
+  }, [activeBulkSkus]);
+
   // Filtered & Sorted catalog for table
   const filteredCatalog = useMemo(() => {
     let result = calculatedCatalog;
@@ -222,6 +234,11 @@ export default function TokopediaTab({
 
     // Sorting
     result = [...result].sort((a, b) => {
+      if (sortBy === 'input_order' && activeBulkSkus.length > 0) {
+        const orderA = bulkOrderMap.get(a.sku.toLowerCase().trim()) ?? 999999;
+        const orderB = bulkOrderMap.get(b.sku.toLowerCase().trim()) ?? 999999;
+        return orderA - orderB;
+      }
       if (sortBy === 'name') return a.name.localeCompare(b.name);
       if (sortBy === 'sku') return a.sku.localeCompare(b.sku);
       if (sortBy === 'eceran_asc') return a.eceran - b.eceran;
@@ -231,7 +248,7 @@ export default function TokopediaTab({
     });
 
     return result;
-  }, [calculatedCatalog, activeBulkSkus, tableSearch, categoryFilter, stockFilter, sortBy]);
+  }, [calculatedCatalog, activeBulkSkus, bulkOrderMap, tableSearch, categoryFilter, stockFilter, sortBy]);
 
   // Pagination calculations
   const totalPages = Math.ceil(filteredCatalog.length / itemsPerPage) || 1;
@@ -617,6 +634,7 @@ export default function TokopediaTab({
                 onClick={() => {
                   setActiveBulkSkus([]);
                   setBulkSkuText('');
+                  if (sortBy === 'input_order') setSortBy('name');
                   showToast('Filter bulk SKU telah dihapus, menampilkan semua produk');
                 }}
                 className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
@@ -685,6 +703,9 @@ export default function TokopediaTab({
               onChange={e => setSortBy(e.target.value as any)}
               className="w-full py-2 px-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
             >
+              {activeBulkSkus.length > 0 && (
+                <option value="input_order">📋 Sesuai Urutan Tempel SKU (Default)</option>
+              )}
               <option value="name">Urut: Nama Produk (A-Z)</option>
               <option value="sku">Urut: SKU</option>
               <option value="eceran_desc">Harga Eceran Tertinggi</option>
@@ -982,10 +1003,12 @@ export default function TokopediaTab({
         setBulkSkuText={setBulkSkuText}
         onApplyFilter={(skus) => {
           setActiveBulkSkus(skus);
+          setSortBy('input_order');
           setCurrentPage(1);
         }}
         onClearFilter={() => {
           setActiveBulkSkus([]);
+          setSortBy('name');
         }}
         showToast={showToast}
       />
