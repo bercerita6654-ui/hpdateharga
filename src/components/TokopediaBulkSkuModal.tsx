@@ -70,32 +70,8 @@ export default function TokopediaBulkSkuModal({
 }: TokopediaBulkSkuModalProps) {
   const [modalTab, setModalTab] = useState<'all' | 'found' | 'not_found'>('all');
   const [previewSearch, setPreviewSearch] = useState<string>('');
-  const [copiedRowSku, setCopiedRowSku] = useState<string | null>(null);
+  const [copiedRowKey, setCopiedRowKey] = useState<string | null>(null);
   const [customPrices, setCustomPrices] = useState<Record<string, number>>({});
-
-  // Helper parser for bulk text
-  const parsedSkus = useMemo(() => {
-    if (!bulkSkuText.trim()) return [];
-    // Split by newlines, commas, semicolons, tabs, spaces
-    const rawTokens = bulkSkuText.split(/[\r\n,;\t]+/);
-    const seen = new Set<string>();
-    const result: string[] = [];
-
-    for (const token of rawTokens) {
-      const trimmed = token.trim();
-      if (!trimmed) continue;
-      // Also handle space-separated if someone pasted "SKU1 SKU2 SKU3" on a single line without commas
-      const subTokens = trimmed.split(/\s+/);
-      for (const sub of subTokens) {
-        const clean = sub.trim();
-        if (clean && !seen.has(clean.toUpperCase())) {
-          seen.add(clean.toUpperCase());
-          result.push(clean);
-        }
-      }
-    }
-    return result;
-  }, [bulkSkuText]);
 
   // Map productList by normalized SKU for fast O(1) lookup
   const productMap = useMemo(() => {
@@ -108,6 +84,45 @@ export default function TokopediaBulkSkuModal({
     }
     return map;
   }, [productList]);
+
+  // Helper parser for bulk text - PRESERVES EVERY SKU INCLUDING DUPLICATES in pasted order
+  const parsedSkus = useMemo(() => {
+    if (!bulkSkuText.trim()) return [];
+    // Split by newlines, commas, semicolons, tabs
+    const rawTokens = bulkSkuText.split(/[\r\n,;\t]+/);
+    const result: string[] = [];
+
+    for (const token of rawTokens) {
+      const trimmed = token.trim();
+      if (!trimmed) continue;
+      // If the line matches an exact SKU in catalog, keep as is
+      if (productMap.has(trimmed.toUpperCase())) {
+        result.push(trimmed);
+      } else {
+        // Also handle space-separated if someone pasted multiple SKUs on a line
+        const subTokens = trimmed.split(/\s+/);
+        for (const sub of subTokens) {
+          const clean = sub.trim();
+          if (clean) {
+            result.push(clean);
+          }
+        }
+      }
+    }
+    return result;
+  }, [bulkSkuText, productMap]);
+
+  // Count duplicate SKUs in input to provide clear user feedback
+  const duplicateCount = useMemo(() => {
+    const seen = new Set<string>();
+    let dupes = 0;
+    for (const s of parsedSkus) {
+      const u = s.trim().toUpperCase();
+      if (seen.has(u)) dupes++;
+      else seen.add(u);
+    }
+    return dupes;
+  }, [parsedSkus]);
 
   // Evaluated bulk results
   const evaluatedItems: BulkItemResult[] = useMemo(() => {
@@ -179,23 +194,65 @@ export default function TokopediaBulkSkuModal({
   }, [evaluatedItems, foundItems, notFoundItems, modalTab, previewSearch]);
 
   // Copy single price
-  const handleCopySingle = (price: number, sku: string) => {
+  const handleCopySingle = (price: number, sku: string, rowKey: string) => {
     navigator.clipboard.writeText(String(price)).then(() => {
-      setCopiedRowSku(sku);
+      setCopiedRowKey(rowKey);
       showToast(`Harga ${formatIDR(price)} untuk ${sku} disalin!`);
-      setTimeout(() => setCopiedRowSku(null), 2000);
+      setTimeout(() => setCopiedRowKey(null), 2000);
     });
   };
 
-  // Copy all pairs (SKU \t Price)
+  // Copy Tokopedia price column only (one price per line, strictly in input order including duplicate SKUs)
   const handleCopyAll = () => {
-    if (foundItems.length === 0) {
-      showToast('Tidak ada produk yang valid untuk disalin');
+    // Determine items to copy based on active tab or all evaluated items
+    const itemsToCopy = modalTab === 'found'
+      ? foundItems
+      : (modalTab === 'not_found'
+          ? notFoundItems
+          : evaluatedItems);
+
+    if (itemsToCopy.length === 0) {
+      showToast('Tidak ada baris harga untuk disalin');
       return;
     }
-    const lines = foundItems.map(item => `${item.rawSku}\t${item.tokopediaPrice}`);
+
+    // ONLY copy the Tokopedia price column (one per line, matches Excel row for row)
+    const lines = itemsToCopy.map(item => String(item.tokopediaPrice));
+    const textToCopy = lines.join('\n');
+
+    const onSuccess = () => {
+      showToast(`Berhasil menyalin ${itemsToCopy.length} baris Kolom Harga Tokopedia saja!`);
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(textToCopy).then(onSuccess);
+    } else {
+      const textArea = document.createElement("textarea");
+      textArea.value = textToCopy;
+      textArea.style.position = "fixed";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        onSuccess();
+      } catch (err) {
+        showToast('Gagal menyalin kolom harga');
+      }
+      document.body.removeChild(textArea);
+    }
+  };
+
+  // Optional: Copy both SKU & Price pairs
+  const handleCopySkuAndPrice = () => {
+    const itemsToCopy = modalTab === 'found' ? foundItems : evaluatedItems;
+    if (itemsToCopy.length === 0) {
+      showToast('Tidak ada produk untuk disalin');
+      return;
+    }
+    const lines = itemsToCopy.map(item => `${item.rawSku}\t${item.tokopediaPrice}`);
     navigator.clipboard.writeText(lines.join('\n')).then(() => {
-      showToast(`Berhasil menyalin ${foundItems.length} pasang SKU & Harga Tokopedia!`);
+      showToast(`Berhasil menyalin ${itemsToCopy.length} pasang SKU & Harga Tokopedia!`);
     });
   };
 
@@ -403,7 +460,17 @@ export default function TokopediaBulkSkuModal({
               <div className="p-2.5 bg-slate-100 rounded-xl border border-slate-200 flex items-center justify-between">
                 <div>
                   <span className="text-[10px] uppercase font-bold text-slate-500 block">Total SKU Terdeteksi</span>
-                  <span className="font-mono text-base font-black text-slate-900">{parsedSkus.length}</span>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="font-mono text-base font-black text-slate-900">{parsedSkus.length}</span>
+                    {duplicateCount > 0 && (
+                      <span 
+                        className="text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded font-bold"
+                        title={`${duplicateCount} baris memiliki SKU ganda / duplikat dan tetap ditampilkan sesuai urutan`}
+                      >
+                        +{duplicateCount} duplikat
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <ListFilter className="w-4 h-4 text-slate-400" />
               </div>
@@ -518,9 +585,10 @@ export default function TokopediaBulkSkuModal({
                       </tr>
                     ) : (
                       displayedItems.map((item, idx) => {
-                        const isCopied = copiedRowSku === item.rawSku;
+                        const rowKey = `${item.rawSku}-${idx}`;
+                        const isCopied = copiedRowKey === rowKey;
                         return (
-                          <tr key={item.rawSku + idx} className="hover:bg-slate-50 transition-colors">
+                          <tr key={rowKey} className="hover:bg-slate-50 transition-colors">
                             <td className="py-2 px-3 text-center text-slate-400 font-mono text-[11px]">
                               {idx + 1}
                             </td>
@@ -582,7 +650,7 @@ export default function TokopediaBulkSkuModal({
                               {item.tokopediaPrice > 0 ? (
                                 <button
                                   type="button"
-                                  onClick={() => handleCopySingle(item.tokopediaPrice, item.rawSku)}
+                                  onClick={() => handleCopySingle(item.tokopediaPrice, item.rawSku, rowKey)}
                                   className={`px-2 py-1 rounded text-[10.5px] font-bold flex items-center gap-1 mx-auto transition-all cursor-pointer ${
                                     isCopied
                                       ? 'bg-emerald-600 text-white'
@@ -634,16 +702,16 @@ export default function TokopediaBulkSkuModal({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
-            {/* Copy All */}
+            {/* Copy All - Prices Only */}
             <button
               type="button"
-              disabled={foundItems.length === 0}
+              disabled={foundItems.length === 0 && notFoundItems.every(i => i.tokopediaPrice === 0)}
               onClick={handleCopyAll}
-              className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shadow-xs"
-              title="Salin pasangan SKU [TAB] Harga Tokopedia untuk paste massal"
+              className="px-3.5 py-2 bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 border border-slate-200 hover:border-emerald-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shadow-xs"
+              title="Salin hanya kolom Harga Tokopedia saja (satu harga per baris, siap ditempel ke Excel)"
             >
-              <Copy className="w-3.5 h-3.5 text-slate-500" />
-              <span>Salin Semua ({foundItems.length})</span>
+              <Copy className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Salin Semua ({modalTab === 'found' ? foundItems.length : (modalTab === 'not_found' ? notFoundItems.length : evaluatedItems.length)})</span>
             </button>
 
             {/* Export Excel */}

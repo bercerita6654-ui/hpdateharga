@@ -178,6 +178,19 @@ export default function TokopediaTab({
     });
   }, [productList, adminPercent, fixedFee, rounding, skuCategoryMap]);
 
+  // Count duplicate SKUs in active bulk filter
+  const bulkDuplicateCount = useMemo(() => {
+    if (activeBulkSkus.length === 0) return 0;
+    const seen = new Set<string>();
+    let dupes = 0;
+    for (const s of activeBulkSkus) {
+      const u = s.toUpperCase().trim();
+      if (seen.has(u)) dupes++;
+      else seen.add(u);
+    }
+    return dupes;
+  }, [activeBulkSkus]);
+
   // Lookup map for input order when bulk filter is active
   const bulkOrderMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -196,8 +209,28 @@ export default function TokopediaTab({
 
     // Apply active bulk SKU filter if enabled
     if (activeBulkSkus.length > 0) {
-      const bulkSet = new Set(activeBulkSkus.map(s => s.toLowerCase().trim()));
-      result = result.filter(item => bulkSet.has(item.sku.toLowerCase().trim()));
+      if (sortBy === 'input_order') {
+        // Fast O(1) map for catalog lookup
+        const catalogMap = new Map<string, typeof calculatedCatalog[0]>();
+        for (const item of calculatedCatalog) {
+          const key = item.sku.toLowerCase().trim();
+          if (!catalogMap.has(key)) {
+            catalogMap.set(key, item);
+          }
+        }
+        // Build list preserving EVERY item in activeBulkSkus (including duplicates) in exact input order
+        const mappedList: typeof calculatedCatalog = [];
+        for (const rawSku of activeBulkSkus) {
+          const item = catalogMap.get(rawSku.toLowerCase().trim());
+          if (item) {
+            mappedList.push(item);
+          }
+        }
+        result = mappedList;
+      } else {
+        const bulkSet = new Set(activeBulkSkus.map(s => s.toLowerCase().trim()));
+        result = result.filter(item => bulkSet.has(item.sku.toLowerCase().trim()));
+      }
     }
 
     if (tableSearch.trim()) {
@@ -232,23 +265,20 @@ export default function TokopediaTab({
       result = result.filter(item => (item.stock || 0) <= 0);
     }
 
-    // Sorting
-    result = [...result].sort((a, b) => {
-      if (sortBy === 'input_order' && activeBulkSkus.length > 0) {
-        const orderA = bulkOrderMap.get(a.sku.toLowerCase().trim()) ?? 999999;
-        const orderB = bulkOrderMap.get(b.sku.toLowerCase().trim()) ?? 999999;
-        return orderA - orderB;
-      }
-      if (sortBy === 'name') return a.name.localeCompare(b.name);
-      if (sortBy === 'sku') return a.sku.localeCompare(b.sku);
-      if (sortBy === 'eceran_asc') return a.eceran - b.eceran;
-      if (sortBy === 'eceran_desc') return b.eceran - a.eceran;
-      if (sortBy === 'tokopedia_desc') return b.tokopediaPrice - a.tokopediaPrice;
-      return 0;
-    });
+    // Sorting (if sortBy is input_order, it is already in the exact pasted order)
+    if (sortBy !== 'input_order') {
+      result = [...result].sort((a, b) => {
+        if (sortBy === 'name') return a.name.localeCompare(b.name);
+        if (sortBy === 'sku') return a.sku.localeCompare(b.sku);
+        if (sortBy === 'eceran_asc') return a.eceran - b.eceran;
+        if (sortBy === 'eceran_desc') return b.eceran - a.eceran;
+        if (sortBy === 'tokopedia_desc') return b.tokopediaPrice - a.tokopediaPrice;
+        return 0;
+      });
+    }
 
     return result;
-  }, [calculatedCatalog, activeBulkSkus, bulkOrderMap, tableSearch, categoryFilter, stockFilter, sortBy]);
+  }, [calculatedCatalog, activeBulkSkus, tableSearch, categoryFilter, stockFilter, sortBy]);
 
   // Pagination calculations
   const totalPages = Math.ceil(filteredCatalog.length / itemsPerPage) || 1;
@@ -342,6 +372,15 @@ export default function TokopediaTab({
     const lines = filteredCatalog.map(p => `${p.sku}\t${p.tokopediaPrice}`);
     navigator.clipboard.writeText(lines.join('\n')).then(() => {
       showToast(`Berhasil menyalin ${filteredCatalog.length} pasangan SKU & Harga Jual!`);
+    });
+  };
+
+  // Copy only Tokopedia Price column (one per line)
+  const copyTokopediaPricesOnly = () => {
+    if (filteredCatalog.length === 0) return;
+    const lines = filteredCatalog.map(p => String(p.tokopediaPrice));
+    navigator.clipboard.writeText(lines.join('\n')).then(() => {
+      showToast(`Berhasil menyalin ${filteredCatalog.length} baris Kolom Harga Tokopedia saja!`);
     });
   };
 
@@ -606,7 +645,7 @@ export default function TokopediaTab({
                 <div className="text-xs font-black text-emerald-950 flex flex-wrap items-center gap-2">
                   <span>Filter Bulk SKU Sedang Aktif</span>
                   <span className="bg-emerald-200 text-emerald-900 text-[10px] px-2 py-0.5 rounded-full font-mono font-bold border border-emerald-300">
-                    {filteredCatalog.length} dari {activeBulkSkus.length} SKU ditemukan
+                    {filteredCatalog.length} produk ({activeBulkSkus.length} SKU diinput{bulkDuplicateCount > 0 ? `, termasuk ${bulkDuplicateCount} SKU duplikat` : ''})
                   </span>
                 </div>
                 <p className="text-[11px] text-emerald-800/90 mt-0.5">
@@ -623,12 +662,12 @@ export default function TokopediaTab({
                 Edit / Tambah SKU
               </button>
               <button
-                onClick={copyAllSkuAndPrice}
+                onClick={copyTokopediaPricesOnly}
                 className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
-                title="Salin hasil filter SKU dan Harga Jual"
+                title="Salin hanya kolom Harga Tokopedia saja (satu harga per baris untuk ditempel ke Excel)"
               >
                 <Copy className="w-3 h-3" />
-                <span>Salin Harga Filter ({filteredCatalog.length})</span>
+                <span>Salin Kolom Harga ({filteredCatalog.length})</span>
               </button>
               <button
                 onClick={() => {
@@ -756,7 +795,7 @@ export default function TokopediaTab({
                   const isCopied = copiedSku === item.sku;
                   return (
                     <tr 
-                      key={item.sku} 
+                      key={`${item.sku}-${globalIdx}`} 
                       className={`hover:bg-slate-50 transition-colors ${
                         selectedProductSku === item.sku ? 'bg-emerald-50/50' : ''
                       }`}
