@@ -23,12 +23,14 @@ import {
   Upload,
   CheckCircle2,
   HelpCircle,
-  ExternalLink
+  ExternalLink,
+  ListFilter
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Product, Fees } from '../types';
 import { formatIDR, sanitizeSku } from '../utils/helpers';
 import TokopediaSimulator from './TokopediaSimulator';
+import TokopediaBulkSkuModal from './TokopediaBulkSkuModal';
 
 interface TokopediaTabProps {
   productList: Product[];
@@ -79,6 +81,11 @@ export default function TokopediaTab({
   // Mass simulation / file upload state
   const [uploadedItems, setUploadedItems] = useState<Array<{ sku: string; name: string; eceran: number }>>([]);
   const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
+
+  // Bulk SKU input state
+  const [bulkSkuText, setBulkSkuText] = useState<string>('');
+  const [activeBulkSkus, setActiveBulkSkus] = useState<string[]>([]);
+  const [showBulkSkuModal, setShowBulkSkuModal] = useState<boolean>(false);
 
   // Helper notification
   const showToast = (msg: string) => {
@@ -175,13 +182,32 @@ export default function TokopediaTab({
   const filteredCatalog = useMemo(() => {
     let result = calculatedCatalog;
 
+    // Apply active bulk SKU filter if enabled
+    if (activeBulkSkus.length > 0) {
+      const bulkSet = new Set(activeBulkSkus.map(s => s.toLowerCase().trim()));
+      result = result.filter(item => bulkSet.has(item.sku.toLowerCase().trim()));
+    }
+
     if (tableSearch.trim()) {
-      const q = tableSearch.toLowerCase().trim();
-      result = result.filter(item => 
-        item.sku.toLowerCase().includes(q) || 
-        item.name.toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q)
-      );
+      const rawQuery = tableSearch.toLowerCase().trim();
+      // If search contains comma, semicolon, or newline, treat as multiple search keys
+      if (rawQuery.includes(',') || rawQuery.includes(';') || rawQuery.includes('\n')) {
+        const queryTokens = rawQuery.split(/[\r\n,;]+/).map(t => t.trim()).filter(Boolean);
+        result = result.filter(item => {
+          const skuLower = item.sku.toLowerCase();
+          const nameLower = item.name.toLowerCase();
+          const catLower = item.category.toLowerCase();
+          return queryTokens.some(token => 
+            skuLower.includes(token) || nameLower.includes(token) || catLower.includes(token)
+          );
+        });
+      } else {
+        result = result.filter(item => 
+          item.sku.toLowerCase().includes(rawQuery) || 
+          item.name.toLowerCase().includes(rawQuery) ||
+          item.category.toLowerCase().includes(rawQuery)
+        );
+      }
     }
 
     if (categoryFilter !== 'all') {
@@ -205,7 +231,7 @@ export default function TokopediaTab({
     });
 
     return result;
-  }, [calculatedCatalog, tableSearch, categoryFilter, stockFilter, sortBy]);
+  }, [calculatedCatalog, activeBulkSkus, tableSearch, categoryFilter, stockFilter, sortBy]);
 
   // Pagination calculations
   const totalPages = Math.ceil(filteredCatalog.length / itemsPerPage) || 1;
@@ -494,6 +520,16 @@ export default function TokopediaTab({
 
           {/* Export and Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
+            {/* Bulk SKU Input Trigger */}
+            <button
+              onClick={() => setShowBulkSkuModal(true)}
+              className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold rounded-xl shadow-sm flex items-center gap-1.5 transition-all active:scale-95 cursor-pointer ring-1 ring-emerald-500/50"
+              title="Input atau tempel banyak SKU sekaligus untuk kalkulasi harga Tokopedia dan filter katalog"
+            >
+              <ListFilter className="w-3.5 h-3.5 text-emerald-100" />
+              <span>Input Bulk SKU {activeBulkSkus.length > 0 ? `(${activeBulkSkus.length} Aktif)` : ''}</span>
+            </button>
+
             {/* Refresh Data Button */}
             <button
               onClick={handleRefresh}
@@ -541,6 +577,56 @@ export default function TokopediaTab({
             </button>
           </div>
         </div>
+
+        {/* ACTIVE BULK FILTER BANNER */}
+        {activeBulkSkus.length > 0 && (
+          <div className="mx-4 my-3 p-3.5 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border border-emerald-300 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs animate-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-emerald-600 text-white rounded-lg flex-shrink-0 shadow-xs">
+                <ListFilter className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="text-xs font-black text-emerald-950 flex flex-wrap items-center gap-2">
+                  <span>Filter Bulk SKU Sedang Aktif</span>
+                  <span className="bg-emerald-200 text-emerald-900 text-[10px] px-2 py-0.5 rounded-full font-mono font-bold border border-emerald-300">
+                    {filteredCatalog.length} dari {activeBulkSkus.length} SKU ditemukan
+                  </span>
+                </div>
+                <p className="text-[11px] text-emerald-800/90 mt-0.5">
+                  Tabel katalog di bawah sedang difilter khusus untuk menampilkan SKU yang Anda input secara massal.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
+              <button
+                onClick={() => setShowBulkSkuModal(true)}
+                className="px-3 py-1.5 bg-white hover:bg-emerald-100/60 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+              >
+                Edit / Tambah SKU
+              </button>
+              <button
+                onClick={copyAllSkuAndPrice}
+                className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                title="Salin hasil filter SKU dan Harga Jual"
+              >
+                <Copy className="w-3 h-3" />
+                <span>Salin Harga Filter ({filteredCatalog.length})</span>
+              </button>
+              <button
+                onClick={() => {
+                  setActiveBulkSkus([]);
+                  setBulkSkuText('');
+                  showToast('Filter bulk SKU telah dihapus, menampilkan semua produk');
+                }}
+                className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                title="Hapus filter bulk dan tampilkan seluruh katalog"
+              >
+                ✕ Hapus Filter Bulk
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Filter and Search Controls Bar */}
         <div className="p-4 border-b border-slate-200 bg-white grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3">
@@ -881,6 +967,28 @@ export default function TokopediaTab({
           </div>
         </div>
       )}
+      {/* MODAL: BULK SKU INPUT & AUTOMATIC CALCULATOR */}
+      <TokopediaBulkSkuModal
+        isOpen={showBulkSkuModal}
+        onClose={() => setShowBulkSkuModal(false)}
+        productList={productList}
+        adminPercent={adminPercent}
+        fixedFee={fixedFee}
+        rounding={rounding}
+        calculateTokopediaPrice={calculateTokopediaPrice}
+        skuCategoryMap={skuCategoryMap}
+        activeBulkSkus={activeBulkSkus}
+        bulkSkuText={bulkSkuText}
+        setBulkSkuText={setBulkSkuText}
+        onApplyFilter={(skus) => {
+          setActiveBulkSkus(skus);
+          setCurrentPage(1);
+        }}
+        onClearFilter={() => {
+          setActiveBulkSkus([]);
+        }}
+        showToast={showToast}
+      />
     </div>
   );
 }
