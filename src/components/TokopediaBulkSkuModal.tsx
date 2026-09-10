@@ -73,8 +73,6 @@ export default function TokopediaBulkSkuModal({
   const [copiedRowSku, setCopiedRowSku] = useState<string | null>(null);
   const [customPrices, setCustomPrices] = useState<Record<string, number>>({});
 
-  if (!isOpen) return null;
-
   // Helper parser for bulk text
   const parsedSkus = useMemo(() => {
     if (!bulkSkuText.trim()) return [];
@@ -303,6 +301,8 @@ export default function TokopediaBulkSkuModal({
     showToast(`Filter diterapkan: Menampilkan ${foundItems.length} produk dari ${parsedSkus.length} SKU yang diinput!`);
     onClose();
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-200">
