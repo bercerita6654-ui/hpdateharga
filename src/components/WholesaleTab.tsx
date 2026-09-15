@@ -263,10 +263,22 @@ export default function WholesaleTab({
   };
 
   // Rounding helper
-  const applyRound = (val: number) => {
-    if (rounding === '1000') return Math.round(val / 1000) * 1000;
-    if (rounding === '100') return Math.round(val / 100) * 100;
+  const applyRound = (val: number, roundOpt = rounding) => {
+    if (roundOpt === '1000') return Math.round(val / 1000) * 1000;
+    if (roundOpt === '500') return Math.round(val / 500) * 500;
+    if (roundOpt === '100') return Math.round(val / 100) * 100;
     return Math.round(val);
+  };
+
+  // Step penurunan minimal antar tier agar harga antar tier tidak sama dan selalu menurun
+  const getTierStepUnit = (ceilingPrice: number, roundOpt = rounding): number => {
+    if (ceilingPrice <= 500) return 50;
+    if (ceilingPrice <= 1500) return 100;
+    if (ceilingPrice <= 3000 && roundOpt === '1000') return 500;
+    if (roundOpt === '1000') return 1000;
+    if (roundOpt === '500') return 500;
+    if (roundOpt === '100') return 100;
+    return 100;
   };
 
   // Tingkat diskon rekomendasi standar sesuai tingkatan tier Shopee
@@ -280,16 +292,97 @@ export default function WholesaleTab({
     return defaultDiscounts[tierIndex] !== undefined ? defaultDiscounts[tierIndex] : Math.min(35, 5 + tierIndex * 5);
   };
 
-  // Helper kalkulasi harga grosir rekomendasi otomatis sesuai tingkatannya
-  const getRecommendedTierPrice = (tierIndex: number, basePrice: number = normalPrice): number => {
-    if (!basePrice || basePrice <= 0) return 0;
-    const discount = getTierDiscountPercent(tierIndex);
-    const rawPrice = basePrice * (1 - discount / 100);
-    const rounded = applyRound(rawPrice);
-    if (baseHpp > 0) {
-      return Math.max(baseHpp, rounded);
+  // Helper kalkulasi harga grosir rekomendasi per tier
+  // Mempertimbangkan harga tier sebelumnya di tabel jika ada:
+  // - Tier 1: rekomendasi harus di bawah normalPrice
+  // - Tier N (misal Tier 2): jika Tier 1 harganya 5.000, maka Tier 2 harus di bawah 5.000
+  const getRecommendedTierPrice = (
+    tierIndex: number,
+    basePrice: number = normalPrice,
+    currentTiers: WholesaleTier[] = tiers
+  ): number => {
+    const base = basePrice > 0 ? basePrice : 100000;
+
+    // Untuk Tier 1 (index 0), ceiling adalah basePrice (harga normal)
+    if (tierIndex === 0) {
+      const discount = getTierDiscountPercent(0);
+      const rawTarget = base * (1 - discount / 100);
+      let candidate = applyRound(rawTarget);
+      const step = getTierStepUnit(base, rounding);
+      if (candidate >= base) {
+        candidate = base - step;
+      }
+      return Math.max(100, candidate);
     }
-    return rounded;
+
+    // Untuk Tier 2 ke atas (index > 0):
+    // Cek harga tier sebelumnya di tabel
+    const prevTier = currentTiers[tierIndex - 1];
+    let prevPrice = prevTier && Number(prevTier.price) > 0 ? Number(prevTier.price) : 0;
+
+    // Jika harga tier sebelumnya belum diisi atau 0, hitung rekomendasi tier sebelumnya
+    if (prevPrice <= 0) {
+      prevPrice = getRecommendedTierPrice(tierIndex - 1, base, currentTiers);
+    }
+
+    const ceiling = prevPrice;
+    const step = getTierStepUnit(ceiling, rounding);
+
+    // Target harga berdasarkan diskon standar terhadap harga normal atau diskon bertingkat terhadap tier sebelumnya
+    const discount = getTierDiscountPercent(tierIndex);
+    const rawFromBase = base * (1 - discount / 100);
+    const rawFromPrev = ceiling * 0.95; // minimal 5% di bawah tier sebelumnya
+    const targetRaw = Math.min(rawFromBase, rawFromPrev);
+
+    let candidate = applyRound(targetRaw);
+
+    // GARANSI: Rekomendasi harus strictly di bawah tier sebelumnya!
+    if (candidate >= ceiling) {
+      candidate = ceiling - step;
+    }
+
+    // Hindari harga <= 0
+    if (candidate <= 0) {
+      candidate = Math.max(100, Math.floor(ceiling * 0.9));
+    }
+
+    return candidate;
+  };
+
+  // Kalkulasi seluruh harga rekomendasi tier secara sekuensial dengan garansi:
+  // 1. Tier 1 < normalPrice
+  // 2. Tier N < Tier N-1 (rekomendasi antar tier tidak boleh sama & harus menurun)
+  // 3. Menghindari tabrakan harga akibat pembulatan
+  const calculateAllRecommendedTierPrices = (
+    tierCount: number,
+    basePrice: number = normalPrice
+  ): number[] => {
+    const base = basePrice > 0 ? basePrice : 100000;
+    const results: number[] = [];
+
+    for (let i = 0; i < tierCount; i++) {
+      const discount = getTierDiscountPercent(i);
+      const rawTarget = base * (1 - discount / 100);
+      let candidate = applyRound(rawTarget);
+
+      // Batas atas (ceiling) adalah harga tier sebelumnya (atau normalPrice untuk tier pertama)
+      const ceiling = i === 0 ? base : results[i - 1];
+      const step = getTierStepUnit(ceiling, rounding);
+
+      // Jika hasil pembulatan >= ceiling, turunkan minimal 1 step di bawah ceiling
+      if (candidate >= ceiling) {
+        candidate = ceiling - step;
+      }
+
+      // Pastikan tidak ada harga negatif atau nol (minimal Rp 100)
+      if (candidate <= 0) {
+        candidate = Math.max(100, Math.floor(ceiling * 0.9));
+      }
+
+      results.push(candidate);
+    }
+
+    return results;
   };
 
   // --- STATE: Wholesale Tiers (1 to 5 tiers) ---
@@ -306,11 +399,12 @@ export default function WholesaleTab({
   // Terapkan harga rekomendasi sesuai tingkatannya ke semua tier
   const applyRecommendedPrices = (basePrice: number = normalPrice) => {
     const targetBase = basePrice > 0 ? basePrice : (normalPrice > 0 ? normalPrice : 100000);
+    const recList = calculateAllRecommendedTierPrices(tiers.length, targetBase);
     setTiers(prev => prev.map((t, idx) => ({
       ...t,
-      price: getRecommendedTierPrice(idx, targetBase)
+      price: recList[idx] ?? t.price
     })));
-    showToast('Harga rekomendasi sesuai tingkatan tier otomatis diterapkan ke semua tier');
+    showToast('Harga rekomendasi bertingkat otomatis diterapkan ke semua tier');
   };
 
   // Sinkronisasi otomatis harga rekomendasi tier saat normalPrice berubah
@@ -318,12 +412,13 @@ export default function WholesaleTab({
   useEffect(() => {
     if (prevNormalPriceRef.current !== normalPrice && normalPrice > 0) {
       prevNormalPriceRef.current = normalPrice;
+      const recList = calculateAllRecommendedTierPrices(tiers.length, normalPrice);
       setTiers(prev => prev.map((t, idx) => ({
         ...t,
-        price: getRecommendedTierPrice(idx, normalPrice)
+        price: recList[idx] ?? t.price
       })));
     }
-  }, [normalPrice, baseHpp, rounding]);
+  }, [normalPrice, baseHpp, rounding, tiers.length]);
 
   // Apply auto-preset configurations
   const applyPreset = (presetName: 'reseller' | 'dozen' | 'bulk' | 'margin') => {
@@ -331,37 +426,47 @@ export default function WholesaleTab({
 
     if (presetName === 'reseller') {
       // 3 Tiers: 3-5 pcs (-5%), 6-11 pcs (-10%), 12-100 pcs (-15%)
-      const p1 = applyRound(base * 0.95);
-      const p2 = applyRound(base * 0.90);
-      const p3 = applyRound(base * 0.85);
+      let p1 = applyRound(base * 0.95);
+      if (p1 >= base) p1 = base - getTierStepUnit(base, rounding);
+      let p2 = applyRound(base * 0.90);
+      if (p2 >= p1) p2 = p1 - getTierStepUnit(p1, rounding);
+      let p3 = applyRound(base * 0.85);
+      if (p3 >= p2) p3 = p2 - getTierStepUnit(p2, rounding);
       setTiers([
-        { id: '1', minQty: 3, maxQty: 5, price: p1 },
-        { id: '2', minQty: 6, maxQty: 11, price: p2 },
-        { id: '3', minQty: 12, maxQty: 100, price: p3 }
+        { id: '1', minQty: 3, maxQty: 5, price: Math.max(100, p1) },
+        { id: '2', minQty: 6, maxQty: 11, price: Math.max(100, p2) },
+        { id: '3', minQty: 12, maxQty: 100, price: Math.max(100, p3) }
       ]);
       showToast('Skema Reseller Standar (3 Tier: 12-100) diterapkan');
     } else if (presetName === 'dozen') {
       // 3 Tiers Lusinan: 6-11 pcs (½ Lusin), 12-23 pcs (1 Lusin), 24+ pcs (2 Lusin)
-      const p1 = applyRound(base * 0.92);
-      const p2 = applyRound(base * 0.86);
-      const p3 = applyRound(base * 0.80);
+      let p1 = applyRound(base * 0.92);
+      if (p1 >= base) p1 = base - getTierStepUnit(base, rounding);
+      let p2 = applyRound(base * 0.86);
+      if (p2 >= p1) p2 = p1 - getTierStepUnit(p1, rounding);
+      let p3 = applyRound(base * 0.80);
+      if (p3 >= p2) p3 = p2 - getTierStepUnit(p2, rounding);
       setTiers([
-        { id: '1', minQty: 6, maxQty: 11, price: p1 },
-        { id: '2', minQty: 12, maxQty: 23, price: p2 },
-        { id: '3', minQty: 24, maxQty: null, price: p3 }
+        { id: '1', minQty: 6, maxQty: 11, price: Math.max(100, p1) },
+        { id: '2', minQty: 12, maxQty: 23, price: Math.max(100, p2) },
+        { id: '3', minQty: 24, maxQty: null, price: Math.max(100, p3) }
       ]);
       showToast('Skema Lusinan / Toko (½ s/d 2+ Lusin) diterapkan');
     } else if (presetName === 'bulk') {
       // 4 Tiers Partai Besar / Grosir B2B
-      const p1 = applyRound(base * 0.94);
-      const p2 = applyRound(base * 0.88);
-      const p3 = applyRound(base * 0.82);
-      const p4 = applyRound(base * 0.76);
+      let p1 = applyRound(base * 0.94);
+      if (p1 >= base) p1 = base - getTierStepUnit(base, rounding);
+      let p2 = applyRound(base * 0.88);
+      if (p2 >= p1) p2 = p1 - getTierStepUnit(p1, rounding);
+      let p3 = applyRound(base * 0.82);
+      if (p3 >= p2) p3 = p2 - getTierStepUnit(p2, rounding);
+      let p4 = applyRound(base * 0.76);
+      if (p4 >= p3) p4 = p3 - getTierStepUnit(p3, rounding);
       setTiers([
-        { id: '1', minQty: 12, maxQty: 23, price: p1 },
-        { id: '2', minQty: 24, maxQty: 49, price: p2 },
-        { id: '3', minQty: 50, maxQty: 99, price: p3 },
-        { id: '4', minQty: 100, maxQty: null, price: p4 }
+        { id: '1', minQty: 12, maxQty: 23, price: Math.max(100, p1) },
+        { id: '2', minQty: 24, maxQty: 49, price: Math.max(100, p2) },
+        { id: '3', minQty: 50, maxQty: 99, price: Math.max(100, p3) },
+        { id: '4', minQty: 100, maxQty: null, price: Math.max(100, p4) }
       ]);
       showToast('Skema Partai Besar B2B (4 Tier) diterapkan');
     } else if (presetName === 'margin') {
@@ -404,9 +509,10 @@ export default function WholesaleTab({
     }
 
     const newIndex = tiers.length;
-    let newPrice = getRecommendedTierPrice(newIndex, normalPrice);
-    if (lastTier && newPrice >= lastTier.price) {
-      newPrice = Math.max(baseHpp > 0 ? baseHpp : 1000, lastTier.price - 1000);
+    let newPrice = getRecommendedTierPrice(newIndex, normalPrice, tiers);
+    if (lastTier && newPrice >= lastTier.price && lastTier.price > 0) {
+      const step = getTierStepUnit(lastTier.price, rounding);
+      newPrice = Math.max(100, lastTier.price - step);
     }
 
     const updated = [...tiers];
@@ -1766,59 +1872,78 @@ export default function WholesaleTab({
 
                     {/* Harga Grosir Satuan (Input, Copy & Rekomendasi Otomatis) */}
                     <td className="p-3.5 font-mono">
-                      <div className="relative flex items-center gap-1.5">
-                        <span className="text-slate-400 text-xs font-bold">Rp</span>
-                        <input
-                          type="text"
-                          value={formatInput(t.price)}
-                          onChange={e => {
-                            const parsed = parseInput(e.target.value);
-                            updateTier(index, 'price', parsed === '' ? 0 : parsed);
-                          }}
-                          className={`w-28 px-2.5 py-1.5 bg-white border rounded-lg text-xs font-mono font-bold text-slate-900 shadow-inner focus:ring-1 outline-none ${
-                            isLoss ? 'border-red-400 focus:ring-red-500' : 'border-slate-300 focus:ring-orange-500'
-                          }`}
-                        />
-                        <button
-                          onClick={() => handleCopy(t.price, `price_tier_${index}`)}
-                          className="p-1.5 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded transition-colors cursor-pointer"
-                          title="Salin harga grosir ini"
-                        >
-                          {copiedKey === `price_tier_${index}` ? (
-                            <Check className="w-3.5 h-3.5 text-emerald-600" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                      </div>
-
-                      {/* Tag / Tombol Rekomendasi Sesuai Tingkatannya */}
                       {(() => {
-                        const recPrice = getRecommendedTierPrice(index, normalPrice);
-                        const recDiscount = getTierDiscountPercent(index);
-                        const isMatch = Math.abs(t.price - recPrice) < 10;
+                        const prevPriceCeiling = index === 0 ? normalPrice : (Number(tiers[index - 1]?.price) || 0);
+                        const isNotCheaperThanPrev = prevPriceCeiling > 0 && t.price >= prevPriceCeiling;
+                        const recPrice = getRecommendedTierPrice(index, normalPrice, tiers);
+                        const recDiscount = normalPrice > 0 && recPrice < normalPrice
+                          ? Number((((normalPrice - recPrice) / normalPrice) * 100).toFixed(1))
+                          : getTierDiscountPercent(index);
+                        const isMatch = Math.abs(t.price - recPrice) < 5;
+
                         return (
-                          <div className="mt-1.5">
-                            {isMatch ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] font-sans font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                                <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                Rekomendasi Tier {index + 1} (-{recDiscount}%)
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  updateTier(index, 'price', recPrice);
-                                  showToast(`Tier ${index + 1}: Harga rekomendasi ${formatIDR(recPrice)} (-${recDiscount}%) diterapkan`);
+                          <>
+                            <div className="relative flex items-center gap-1.5">
+                              <span className="text-slate-400 text-xs font-bold">Rp</span>
+                              <input
+                                type="text"
+                                value={formatInput(t.price)}
+                                onChange={e => {
+                                  const parsed = parseInput(e.target.value);
+                                  updateTier(index, 'price', parsed === '' ? 0 : parsed);
                                 }}
-                                className="inline-flex items-center gap-1 text-[10px] font-sans font-bold text-orange-700 bg-orange-50 hover:bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200 transition-all cursor-pointer group"
-                                title={`Gunakan harga rekomendasi Tier ${index + 1}: ${formatIDR(recPrice)} (Diskon ${recDiscount}%)`}
+                                className={`w-28 px-2.5 py-1.5 bg-white border rounded-lg text-xs font-mono font-bold text-slate-900 shadow-inner focus:ring-1 outline-none ${
+                                  isNotCheaperThanPrev
+                                    ? 'border-red-400 bg-red-50/40 text-red-900 focus:ring-red-500'
+                                    : isLoss
+                                    ? 'border-red-400 focus:ring-red-500'
+                                    : 'border-slate-300 focus:ring-orange-500'
+                                }`}
+                              />
+                              <button
+                                onClick={() => handleCopy(t.price, `price_tier_${index}`)}
+                                className="p-1.5 text-slate-400 hover:text-orange-600 hover:bg-orange-50 rounded transition-colors cursor-pointer"
+                                title="Salin harga grosir ini"
                               >
-                                <Sparkles className="w-2.5 h-2.5 text-orange-500 group-hover:rotate-12 transition-transform" />
-                                <span>Rekomendasi: <strong>{formatInput(recPrice)}</strong> (-{recDiscount}%)</span>
+                                {copiedKey === `price_tier_${index}` ? (
+                                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                ) : (
+                                  <Copy className="w-3.5 h-3.5" />
+                                )}
                               </button>
+                            </div>
+
+                            {/* Warning jika harga sama atau lebih mahal dari tier sebelumnya / normal */}
+                            {isNotCheaperThanPrev && (
+                              <div className="text-[10.5px] text-red-600 font-sans font-semibold flex items-center gap-1 mt-1">
+                                <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                                <span>Harus &lt; {formatIDR(prevPriceCeiling)}</span>
+                              </div>
                             )}
-                          </div>
+
+                            {/* Tag / Tombol Rekomendasi Sesuai Tingkatannya */}
+                            <div className="mt-1.5">
+                              {isMatch ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-sans font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                  <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                  Rekomendasi Tier {index + 1} (-{recDiscount}%)
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    updateTier(index, 'price', recPrice);
+                                    showToast(`Tier ${index + 1}: Harga rekomendasi ${formatIDR(recPrice)} (-${recDiscount}%) diterapkan`);
+                                  }}
+                                  className="inline-flex items-center gap-1 text-[10px] font-sans font-bold text-orange-700 bg-orange-50 hover:bg-orange-100 px-1.5 py-0.5 rounded border border-orange-200 transition-all cursor-pointer group shadow-xs"
+                                  title={`Gunakan harga rekomendasi Tier ${index + 1}: ${formatIDR(recPrice)} (Diskon ${recDiscount}%) - Dijamin di bawah ${index === 0 ? 'Harga Normal' : 'Tier ' + index}`}
+                                >
+                                  <Sparkles className="w-2.5 h-2.5 text-orange-500 group-hover:rotate-12 transition-transform" />
+                                  <span>Rekomendasi: <strong>{formatInput(recPrice)}</strong> (-{recDiscount}%)</span>
+                                </button>
+                              )}
+                            </div>
+                          </>
                         );
                       })()}
                     </td>
