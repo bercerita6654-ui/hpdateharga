@@ -921,6 +921,14 @@ export default function WholesaleTab({
     }
 
     const currentSku = selectedSku || activeProduct?.sku || '';
+    const currentProd = activeProduct || productList.find(p => sanitizeSku(p.sku) === sanitizeSku(currentSku));
+    const currentStock = currentProd?.stock ?? 0;
+
+    if (currentStock <= 0) {
+      showToast(`⚠️ Produk ${currentSku || 'ini'} tidak dapat masuk antrean karena STOK KOSONG (0) pada sheet STOCK LIST.`);
+      return;
+    }
+
     const currentName = activeProduct?.name || (currentSku ? `Produk ${currentSku}` : 'PRODUK GROSIR');
 
     const newItem: WholesaleBasketItem = {
@@ -950,7 +958,7 @@ export default function WholesaleTab({
     });
   };
 
-  // Bulk Add products to Wholesale Basket with the currently configured tier settings
+  // Bulk Add products to Wholesale Basket with the currently configured tier settings (strictly in-stock items only)
   const handleBulkAddProductsToBasket = (productsToAdd: Product[], groupLabel: string) => {
     if (!productsToAdd || productsToAdd.length === 0) {
       showToast('Tidak ada produk yang dipilih untuk ditambahkan.');
@@ -958,6 +966,15 @@ export default function WholesaleTab({
     }
     if (tiers.length === 0) {
       showToast('Konfigurasikan minimal 1 tier harga grosir terlebih dahulu.');
+      return;
+    }
+
+    // Filter HANYA produk yang memiliki stock > 0 mengacu pada sheet STOCK LIST
+    const inStockProducts = productsToAdd.filter(p => (p.stock ?? 0) > 0);
+    const zeroStockCount = productsToAdd.length - inStockProducts.length;
+
+    if (inStockProducts.length === 0) {
+      showToast(`⚠️ Seluruh ${productsToAdd.length} produk di ${groupLabel} memiliki STOK KOSONG (0) pada sheet STOCK LIST. Tidak ada produk yang ditambahkan ke keranjang antrean.`);
       return;
     }
 
@@ -973,7 +990,7 @@ export default function WholesaleTab({
         map.set(key, item);
       });
 
-      productsToAdd.forEach(p => {
+      inStockProducts.forEach(p => {
         const pSku = p.sku || '';
         const pCleanSku = sanitizeSku(pSku);
         const pName = p.name || (pSku ? `Produk ${pSku}` : 'PRODUK GROSIR');
@@ -1028,7 +1045,7 @@ export default function WholesaleTab({
       return nextList;
     });
 
-    showToast(`Bulk Add Berhasil! ${productsToAdd.length} produk dari ${groupLabel} (${newCount} baru, ${updatedCount} diperbarui) masuk ke keranjang grosir dengan setingan tier aktif.`);
+    showToast(`Bulk Add Berhasil! ${inStockProducts.length} produk berstok dari ${groupLabel} (${newCount} baru, ${updatedCount} diperbarui${zeroStockCount > 0 ? `, ${zeroStockCount} produk stok 0 dilewati` : ''}) masuk ke antrean grosir.`);
     setIsBasketModalOpen(true);
   };
 
@@ -2680,6 +2697,8 @@ export default function WholesaleTab({
         productList={productList}
         categories={categories}
         skuCategoryMap={skuCategoryMap}
+        filterInStockOnly={true}
+        title="Tambah Banyak per Kategori (Hanya Berstok)"
         onSelectProduct={(sku) => {
           const found = productList.find(p => sanitizeSku(p.sku) === sanitizeSku(sku));
           if (found) {
@@ -2691,7 +2710,7 @@ export default function WholesaleTab({
           handleBulkAddProductsToBasket(products, `Kategori: ${catName}`);
           setShowBulkCategoryModal(false);
         }}
-        bulkActionLabel="Tambahkan Semua ke Keranjang Grosir"
+        bulkActionLabel="Tambahkan Semua Berstok ke Antrean"
       />
 
       {/* BULK ADD BY BRAND MODAL */}
@@ -2700,6 +2719,8 @@ export default function WholesaleTab({
         onClose={() => setShowBulkBrandModal(false)}
         productList={productList}
         skuCategoryMap={skuCategoryMap}
+        filterInStockOnly={true}
+        title="Tambah Banyak per Merk (Hanya Berstok)"
         onSelectProduct={(sku) => {
           const found = productList.find(p => sanitizeSku(p.sku) === sanitizeSku(sku));
           if (found) {
@@ -2711,7 +2732,7 @@ export default function WholesaleTab({
           handleBulkAddProductsToBasket(products, `Merk: ${brandName}`);
           setShowBulkBrandModal(false);
         }}
-        bulkActionLabel="Tambahkan Semua ke Keranjang Grosir"
+        bulkActionLabel="Tambahkan Semua Berstok ke Antrean"
       />
     </div>
   );

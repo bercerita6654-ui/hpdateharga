@@ -773,16 +773,17 @@ export default function App() {
             let partaiIdx = headerHpp.findIndex(h => h.includes('partai'));
             if (partaiIdx === -1) partaiIdx = 12; // Kolom 13 (index 12)
 
-            let qtyIdx = headerHpp.findIndex(h => h === 'stok' || h.includes('stok') || h.includes('qty') || h.includes('stock') || h.includes('quantity'));
-            if (qtyIdx === -1) qtyIdx = 12;
+            let qtyIdx = headerHpp.findIndex(h => h === 'stok' || h.includes('stok') || h === 'qty' || h.includes('qty') || h.includes('stock') || h.includes('quantity'));
+            if (qtyIdx === -1) qtyIdx = 14; // Kolom 15 'Qty' (index 14) di STOCK LIST
 
             let nameIdx = headerHpp.findIndex(h => h.includes('description') || h.includes('nama') || h.includes('produk'));
-            if (nameIdx === -1) nameIdx = 1;
+            if (nameIdx === -1) nameIdx = 2; // Kolom 3 (index 2)
 
             let unitIdx = headerHpp.findIndex(h => h.includes('unit'));
-            if (unitIdx === -1) unitIdx = 2;
+            if (unitIdx === -1) unitIdx = 3; // Kolom 4 (index 3)
 
-            const skuIdx = 0;
+            let skuIdx = headerHpp.findIndex(h => h === 'code' || h === 'sku' || h.includes('code') || h.includes('sku'));
+            if (skuIdx === -1) skuIdx = 0;
 
             linesHpp.slice(1).forEach(l => {
               if (!l.trim()) return;

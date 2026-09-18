@@ -129,13 +129,13 @@ export default function WholesaleBasketModal({
     });
   }, [wholesaleBasket, basketSearchQuery]);
 
-  // Catalog products for quick search & add inside modal
+  // Catalog products for quick search & add inside modal (only products with stock > 0 based on STOCK LIST)
   const filteredCatalogProducts = useMemo(() => {
     if (!catalogSearchQuery.trim()) return [];
     const q = catalogSearchQuery.toLowerCase().trim();
     return productList
-      .filter(p => p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q))
-      .slice(0, 10);
+      .filter(p => (p.stock ?? 0) > 0 && (p.sku.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)))
+      .slice(0, 15);
   }, [productList, catalogSearchQuery]);
 
   // Calculate default automatic price: (Eceran + 28% + 3.000)
@@ -146,6 +146,11 @@ export default function WholesaleBasketModal({
 
   // Add a product from catalog directly into basket
   const handleAddCatalogProduct = (p: Product) => {
+    if ((p.stock ?? 0) <= 0) {
+      showToast(`⚠️ Produk ${p.sku} memiliki STOK KOSONG (0) pada sheet STOCK LIST.`);
+      return;
+    }
+
     const pSku = p.sku || '';
     const pName = p.name || (pSku ? `Produk ${pSku}` : 'PRODUK GROSIR');
     const pUnit = p.unit || 'pcs';
@@ -181,7 +186,7 @@ export default function WholesaleBasketModal({
           return clone;
         }
       }
-      showToast(`Produk ${pSku || pName} berhasil ditambahkan ke antrean!`);
+      showToast(`Produk ${pSku || pName} (Stok: ${p.stock ?? 0}) berhasil ditambahkan ke antrean!`);
       return [...prev, newItem];
     });
 
@@ -616,7 +621,7 @@ export default function WholesaleBasketModal({
                 <div className="absolute left-0 right-0 top-full mt-1 bg-white rounded-xl shadow-xl border border-slate-200 max-h-60 overflow-y-auto z-40 divide-y divide-slate-100 animate-in fade-in zoom-in-95">
                   {filteredCatalogProducts.length === 0 ? (
                     <div className="p-3 text-center text-xs text-slate-400">
-                      Tidak ada produk ditemukan untuk &quot;{catalogSearchQuery}&quot;
+                      Tidak ada produk berstok (&gt; 0) ditemukan untuk &quot;{catalogSearchQuery}&quot;
                     </div>
                   ) : (
                     filteredCatalogProducts.map(p => (
@@ -634,7 +639,11 @@ export default function WholesaleBasketModal({
                               {p.name}
                             </span>
                           </div>
-                          <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-2">
+                          <div className="text-[10px] text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded">
+                              Stok: {p.stock ?? 0}
+                            </span>
+                            <span>•</span>
                             <span>Eceran: {formatIDR(p.eceran)}</span>
                             <span>•</span>
                             <span>HPP: {formatIDR(p.hpp)}</span>
@@ -1038,6 +1047,7 @@ export default function WholesaleBasketModal({
                   const t1 = item.tiers?.[0] || { id: '1', minQty: 3, maxQty: 5, price: Math.round(item.normalPrice * 0.95) };
                   const t2 = item.tiers?.[1] || { id: '2', minQty: 6, maxQty: 11, price: Math.round(item.normalPrice * 0.90) };
                   const t3 = item.tiers?.[2] || { id: '3', minQty: 12, maxQty: 100, price: Math.round(item.normalPrice * 0.85) };
+                  const matchingProd = productList.find(p => sanitizeSku(p.sku) === sanitizeSku(item.sku));
 
                   // Diskon percentage calculations
                   const d1 = item.normalPrice > 0 ? ((item.normalPrice - t1.price) / item.normalPrice) * 100 : 0;
@@ -1071,6 +1081,15 @@ export default function WholesaleBasketModal({
                               <h4 className="font-extrabold text-sm text-slate-800">
                                 {item.productName}
                               </h4>
+                              {matchingProd?.stock !== undefined && (
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                                  matchingProd.stock > 0
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : 'bg-red-50 text-red-600 border-red-200'
+                                }`}>
+                                  Stok: {matchingProd.stock}
+                                </span>
+                              )}
                               <span className="text-[10px] font-bold bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded uppercase">
                                 {item.unit || 'pcs'}
                               </span>

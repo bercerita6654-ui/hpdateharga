@@ -19,6 +19,7 @@ interface CategoryModalProps {
   onBulkAddProducts?: (products: Product[], categoryName: string) => void;
   title?: string;
   bulkActionLabel?: string;
+  filterInStockOnly?: boolean;
 }
 
 export default function CategoryModal({
@@ -32,7 +33,8 @@ export default function CategoryModal({
   onSelectProduct,
   onBulkAddProducts,
   title = 'Tambah Banyak (Kategori)',
-  bulkActionLabel
+  bulkActionLabel,
+  filterInStockOnly = false
 }: CategoryModalProps) {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [categorySearchResults, setCategorySearchResults] = useState<Product[]>([]);
@@ -46,7 +48,14 @@ export default function CategoryModal({
       setCategorySearchResults([]);
       return;
     }
-    const results = productList.filter(p => skuCategoryMap[p.sku] === category);
+    const results = productList.filter(p => {
+      const matchCat = skuCategoryMap[p.sku] === category;
+      if (!matchCat) return false;
+      if (filterInStockOnly) {
+        return (p.stock ?? 0) > 0;
+      }
+      return true;
+    });
     setCategorySearchResults(results);
   };
 
@@ -114,8 +123,13 @@ export default function CategoryModal({
               </div>
             ) : (
               <div className="space-y-1">
-                <div className="text-[9px] font-bold text-indigo-600 uppercase tracking-wider mb-2 px-2 border-b border-slate-100 pb-2">
-                  Ditemukan {categorySearchResults.length} produk di {selectedCategory}:
+                <div className="flex items-center justify-between text-[9px] font-bold uppercase tracking-wider mb-2 px-2 border-b border-slate-100 pb-2">
+                  <span className="text-indigo-600">Ditemukan {categorySearchResults.length} produk di {selectedCategory}:</span>
+                  {filterInStockOnly && (
+                    <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-bold">
+                      Hanya yang Berstok
+                    </span>
+                  )}
                 </div>
                 {categorySearchResults.slice(0, 100).map((p, i) => (
                   <div
@@ -130,9 +144,20 @@ export default function CategoryModal({
                     }`}
                   >
                     <span className="truncate pr-3 font-medium text-slate-700">{p.name}</span>
-                    <span className="text-[9px] px-1.5 py-0.5 bg-white border border-slate-200 text-slate-500 rounded font-mono flex-shrink-0">
-                      {p.sku}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {p.stock !== undefined && (
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold ${
+                          p.stock > 0
+                            ? 'bg-emerald-50 border border-emerald-200 text-emerald-700'
+                            : 'bg-slate-100 border border-slate-200 text-slate-400'
+                        }`}>
+                          Stok: {p.stock}
+                        </span>
+                      )}
+                      <span className="text-[9px] px-1.5 py-0.5 bg-white border border-slate-200 text-slate-500 rounded font-mono">
+                        {p.sku}
+                      </span>
+                    </div>
                   </div>
                 ))}
                 {categorySearchResults.length > 100 && (
