@@ -117,6 +117,7 @@ export default function WholesaleTab({
   const [insurancePercent, setInsurancePercent] = useState<number>(0.5); // Asuransi Pengiriman 0.5%
   const [amsPercent, setAmsPercent] = useState<number>(1.0); // AMS 1%
   const [promoXtraPercent, setPromoXtraPercent] = useState<number>(6.5); // Promo XTRA+ 6.5%
+  const [promotionFeePercent, setPromotionFeePercent] = useState<number>(5.0); // Biaya Promosi Toko 5-10% (Default 5%)
   
   // Program Hemat Biaya Kirim (Rp 510 flat per order/pesanan)
   const [includeHematKirim, setIncludeHematKirim] = useState<boolean>(true);
@@ -242,15 +243,16 @@ export default function WholesaleTab({
   // HPP Efektif sama dengan HPP Produk
   const effectiveHpp = baseHpp;
 
-  // Total Shopee Percentage Rate (Admin 11% + Asuransi 0.5% + AMS 1% + Promo XTRA+ 6.5% = 19.0%)
+  // Total Shopee Percentage Rate (Admin 11% + Asuransi 0.5% + AMS 1% + Promo XTRA+ 6.5% + Biaya Promosi 5% = 24.0%)
   const totalPercentageRate = useMemo(() => {
     return (
       (Number(adminFeePercent) || 0) +
       (Number(insurancePercent) || 0) +
       (Number(amsPercent) || 0) +
-      (Number(promoXtraPercent) || 0)
+      (Number(promoXtraPercent) || 0) +
+      (Number(promotionFeePercent) || 0)
     );
-  }, [adminFeePercent, insurancePercent, amsPercent, promoXtraPercent]);
+  }, [adminFeePercent, insurancePercent, amsPercent, promoXtraPercent, promotionFeePercent]);
 
   // Total Biaya Tetap per Pesanan (Biaya Proses 1250 + Jubelio 350 + Packing 1000 + Hemat Kirim 510 = Rp 3.110)
   const totalFixedFeesPerOrder = useMemo(() => {
@@ -640,7 +642,7 @@ export default function WholesaleTab({
       const discountFromNormal = normalPrice > 0 ? ((normalPrice - price) / normalPrice) * 100 : 0;
       const sampleQty = Math.max(1, Number(tier.minQty) || 1); // Simulasi pesanan kuantitas batas bawah tier
       
-      // 1. Potongan Biaya Persentase (11% Admin + 0.5% Asuransi + 1% AMS + 6.5% Promo XTRA+ = 19.0%)
+      // 1. Potongan Biaya Persentase (Admin 11% + Asuransi 0.5% + AMS 1% + Promo XTRA+ 6.5% + Biaya Promosi 5% = Total)
       const percentCutPerUnit = (price * totalPercentageRate) / 100;
       const totalPercentCut = percentCutPerUnit * sampleQty;
 
@@ -1598,7 +1600,7 @@ export default function WholesaleTab({
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                 {/* Biaya Admin 11% */}
                 <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
                   <span className="text-[10px] font-bold text-slate-600 block truncate">Biaya Admin</span>
@@ -1671,6 +1673,26 @@ export default function WholesaleTab({
                     <span className="text-xs font-bold text-slate-500">%</span>
                   </div>
                   <span className="text-[9px] text-slate-400 block mt-0.5">Cashback/Ongkir</span>
+                </div>
+
+                {/* Biaya Promosi Toko 5-10% */}
+                <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+                  <span className="text-[10px] font-bold text-slate-600 block truncate" title="Biaya Promosi Toko (Voucher Diskon Toko / Flash Sale / Kombo Hemat 5-10%)">
+                    Biaya Promosi
+                  </span>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="30"
+                      value={promotionFeePercent}
+                      onChange={e => setPromotionFeePercent(parseFloat(e.target.value) || 0)}
+                      className="w-full text-right px-1.5 py-0.5 text-xs font-mono font-bold bg-white border border-slate-200 rounded text-slate-800 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                    />
+                    <span className="text-xs font-bold text-slate-500">%</span>
+                  </div>
+                  <span className="text-[9px] text-slate-400 block mt-0.5">Voucher 5-10%</span>
                 </div>
               </div>
             </div>
