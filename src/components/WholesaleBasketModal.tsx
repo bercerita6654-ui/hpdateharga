@@ -313,12 +313,9 @@ export default function WholesaleBasketModal({
             current.maxQty = null;
           } else {
             const parsed = parseInt(value, 10);
-            if (!isNaN(parsed) && parsed >= 1) {
+            if (!isNaN(parsed)) {
               current.maxQty = parsed;
-              if (current.minQty >= parsed) {
-                current.minQty = Math.max(1, parsed - 1);
-              }
-              // Cascade next minQty
+              // Cascade next minQty smoothly
               if (tierIndex + 1 < tiersClone.length) {
                 tiersClone[tierIndex + 1].minQty = parsed + 1;
               }
@@ -1181,7 +1178,7 @@ export default function WholesaleBasketModal({
                               <span className="text-slate-500 block text-[10px] font-bold">Min Qty:</span>
                               <input
                                 type="number"
-                                min={2}
+                                min={1}
                                 value={t1.minQty}
                                 onChange={e => handleUpdateItemTier(item.id, 0, 'minQty', e.target.value)}
                                 className="w-full px-2 py-1 bg-white border border-amber-200 rounded-md text-xs font-mono font-bold text-slate-800"
@@ -1191,7 +1188,7 @@ export default function WholesaleBasketModal({
                               <span className="text-slate-500 block text-[10px] font-bold">Max Qty:</span>
                               <input
                                 type="number"
-                                min={t1.minQty}
+                                min={1}
                                 value={t1.maxQty ?? ''}
                                 onChange={e => handleUpdateItemTier(item.id, 0, 'maxQty', e.target.value)}
                                 placeholder="Max"
@@ -1232,7 +1229,7 @@ export default function WholesaleBasketModal({
                               <span className="text-slate-500 block text-[10px] font-bold">Min Qty:</span>
                               <input
                                 type="number"
-                                min={t1.maxQty ? t1.maxQty + 1 : 6}
+                                min={1}
                                 value={t2.minQty}
                                 onChange={e => handleUpdateItemTier(item.id, 1, 'minQty', e.target.value)}
                                 className="w-full px-2 py-1 bg-white border border-amber-200 rounded-md text-xs font-mono font-bold text-slate-800"
@@ -1242,7 +1239,7 @@ export default function WholesaleBasketModal({
                               <span className="text-slate-500 block text-[10px] font-bold">Max Qty:</span>
                               <input
                                 type="number"
-                                min={t2.minQty}
+                                min={1}
                                 value={t2.maxQty ?? ''}
                                 onChange={e => handleUpdateItemTier(item.id, 1, 'maxQty', e.target.value)}
                                 placeholder="Max"
@@ -1283,7 +1280,7 @@ export default function WholesaleBasketModal({
                               <span className="text-slate-500 block text-[10px] font-bold">Min Qty:</span>
                               <input
                                 type="number"
-                                min={t2.maxQty ? t2.maxQty + 1 : 12}
+                                min={1}
                                 value={t3.minQty}
                                 onChange={e => handleUpdateItemTier(item.id, 2, 'minQty', e.target.value)}
                                 className="w-full px-2 py-1 bg-white border border-amber-200 rounded-md text-xs font-mono font-bold text-slate-800"
@@ -1293,7 +1290,7 @@ export default function WholesaleBasketModal({
                               <span className="text-slate-500 block text-[10px] font-bold">Max Qty:</span>
                               <input
                                 type="number"
-                                min={t3.minQty}
+                                min={1}
                                 value={t3.maxQty ?? ''}
                                 onChange={e => handleUpdateItemTier(item.id, 2, 'maxQty', e.target.value)}
                                 placeholder="dst"

@@ -116,6 +116,7 @@ export default function WholesaleTab({
   const [adminFeePercent, setAdminFeePercent] = useState<number>(11.0); // Biaya Admin 11%
   const [insurancePercent, setInsurancePercent] = useState<number>(0.5); // Asuransi Pengiriman 0.5%
   const [amsPercent, setAmsPercent] = useState<number>(1.0); // AMS 1%
+  const [promoXtraPercent, setPromoXtraPercent] = useState<number>(6.5); // Promo XTRA+ 6.5%
   
   // Program Hemat Biaya Kirim (Rp 510 flat per order/pesanan)
   const [includeHematKirim, setIncludeHematKirim] = useState<boolean>(true);
@@ -241,10 +242,15 @@ export default function WholesaleTab({
   // HPP Efektif sama dengan HPP Produk
   const effectiveHpp = baseHpp;
 
-  // Total Shopee Percentage Rate (Admin 11% + Asuransi 0.5% + AMS 1% = 12.5%)
+  // Total Shopee Percentage Rate (Admin 11% + Asuransi 0.5% + AMS 1% + Promo XTRA+ 6.5% = 19.0%)
   const totalPercentageRate = useMemo(() => {
-    return (Number(adminFeePercent) || 0) + (Number(insurancePercent) || 0) + (Number(amsPercent) || 0);
-  }, [adminFeePercent, insurancePercent, amsPercent]);
+    return (
+      (Number(adminFeePercent) || 0) +
+      (Number(insurancePercent) || 0) +
+      (Number(amsPercent) || 0) +
+      (Number(promoXtraPercent) || 0)
+    );
+  }, [adminFeePercent, insurancePercent, amsPercent, promoXtraPercent]);
 
   // Total Biaya Tetap per Pesanan (Biaya Proses 1250 + Jubelio 350 + Packing 1000 + Hemat Kirim 510 = Rp 3.110)
   const totalFixedFeesPerOrder = useMemo(() => {
@@ -554,7 +560,7 @@ export default function WholesaleTab({
     showToast('Tingkat harga grosir dihapus');
   };
 
-  // Update tier fields with automatic sequential range cascading
+  // Update tier fields with clean, non-locking custom range editing
   const updateTier = (index: number, field: keyof WholesaleTier, value: any) => {
     const updated = tiers.map(t => ({ ...t }));
     const current = { ...updated[index] };
@@ -569,52 +575,26 @@ export default function WholesaleTab({
     if (field === 'maxQty') {
       if (value === '' || value === null || value === undefined) {
         current.maxQty = null;
-        updated[index] = current;
       } else {
         const parsed = parseInt(value, 10);
-        if (isNaN(parsed) || parsed < 1) {
+        if (isNaN(parsed)) {
           current.maxQty = null;
-          updated[index] = current;
         } else {
           current.maxQty = parsed;
 
-          // Pastikan minQty tier saat ini lebih kecil dari maxQty
-          if (typeof current.minQty === 'number' && current.minQty >= parsed) {
-            current.minQty = Math.max(index === 0 ? 2 : 1, parsed - 1);
-            if (index > 0) {
-              updated[index - 1].maxQty = current.minQty - 1;
+          // Jika ada tier berikutnya (index + 1), hubungkan kuantitas awal tier berikutnya (Maks + 1)
+          if (index + 1 < updated.length) {
+            const nextTier = { ...updated[index + 1] };
+            nextTier.minQty = parsed + 1;
+            // Jika maxQty tier berikutnya sebelumnya lebih kecil atau sama dengan minQty barunya, sesuaikan agar tetap masuk akal
+            if (typeof nextTier.maxQty === 'number' && nextTier.maxQty <= nextTier.minQty) {
+              nextTier.maxQty = nextTier.minQty + 5;
             }
-          }
-          updated[index] = current;
-
-          // Otomatis ubah rentang kuantitas tier berikutnya secara berantai (cascade):
-          // Contoh: Tier 1 rentang 3 - 11 => Tier 2 otomatis mulai 12 - 24, Tier 3 otomatis mulai 25 - 100, dst.
-          for (let nextIdx = index + 1; nextIdx < updated.length; nextIdx++) {
-            const prev = updated[nextIdx - 1];
-            if (typeof prev.maxQty === 'number' && prev.maxQty >= 1) {
-              const expectedMin = prev.maxQty + 1;
-              const nextTier = { ...updated[nextIdx] };
-              const currentMin = typeof nextTier.minQty === 'number' ? nextTier.minQty : 1;
-              const currentMax = typeof nextTier.maxQty === 'number' ? nextTier.maxQty : null;
-
-              // Hitung span proporsional: Tier 2 (+12 pcs), Tier 3 (+75 pcs), Tier 4+ (+100 pcs)
-              const defaultSpan = nextIdx === 1 ? 12 : nextIdx === 2 ? 75 : 100;
-              const prevSpan = (currentMax !== null && currentMax > currentMin)
-                ? (currentMax - currentMin)
-                : defaultSpan;
-
-              nextTier.minQty = expectedMin;
-
-              // Jika maxQty tier berikutnya lebih kecil atau sama dengan minQty barunya, geser otomatis
-              if (currentMax !== null && currentMax <= expectedMin) {
-                nextTier.maxQty = expectedMin + prevSpan;
-              }
-
-              updated[nextIdx] = nextTier;
-            }
+            updated[index + 1] = nextTier;
           }
         }
       }
+      updated[index] = current;
       setTiers(updated);
       return;
     }
@@ -622,56 +602,23 @@ export default function WholesaleTab({
     if (field === 'minQty') {
       if (value === '' || value === null || value === undefined) {
         current.minQty = '' as any;
-        updated[index] = current;
       } else {
         const parsed = parseInt(value, 10);
-        if (isNaN(parsed) || parsed < 1) {
+        if (isNaN(parsed)) {
           current.minQty = 1;
-          updated[index] = current;
         } else {
           current.minQty = parsed;
 
           // Jika mengedit minQty pada Tier 2 ke atas (index > 0):
-          // Otomatis sinkronkan Max Qty tier sebelumnya (index - 1) = parsed - 1
+          // Selaraskan Max Qty tier sebelumnya (index - 1) = parsed - 1
           if (index > 0) {
             const prevTier = { ...updated[index - 1] };
             prevTier.maxQty = Math.max(1, parsed - 1);
-            if (typeof prevTier.minQty === 'number' && prevTier.minQty >= prevTier.maxQty) {
-              prevTier.minQty = Math.max(index - 1 === 0 ? 2 : 1, prevTier.maxQty - 1);
-            }
             updated[index - 1] = prevTier;
-          }
-
-          // Pastikan maxQty tier saat ini tetap lebih besar dari minQty barunya
-          if (typeof current.maxQty === 'number' && current.maxQty <= parsed) {
-            const defaultSpan = index === 0 ? 8 : index === 1 ? 12 : 75;
-            current.maxQty = parsed + defaultSpan;
-          }
-          updated[index] = current;
-
-          // Cascade penyesuaian ke tier-tier berikutnya
-          for (let nextIdx = index + 1; nextIdx < updated.length; nextIdx++) {
-            const prev = updated[nextIdx - 1];
-            if (typeof prev.maxQty === 'number' && prev.maxQty >= 1) {
-              const expectedMin = prev.maxQty + 1;
-              const nextTier = { ...updated[nextIdx] };
-              const currentMin = typeof nextTier.minQty === 'number' ? nextTier.minQty : 1;
-              const currentMax = typeof nextTier.maxQty === 'number' ? nextTier.maxQty : null;
-
-              const defaultSpan = nextIdx === 1 ? 12 : nextIdx === 2 ? 75 : 100;
-              const prevSpan = (currentMax !== null && currentMax > currentMin)
-                ? (currentMax - currentMin)
-                : defaultSpan;
-
-              nextTier.minQty = expectedMin;
-              if (currentMax !== null && currentMax <= expectedMin) {
-                nextTier.maxQty = expectedMin + prevSpan;
-              }
-              updated[nextIdx] = nextTier;
-            }
           }
         }
       }
+      updated[index] = current;
       setTiers(updated);
       return;
     }
@@ -693,7 +640,7 @@ export default function WholesaleTab({
       const discountFromNormal = normalPrice > 0 ? ((normalPrice - price) / normalPrice) * 100 : 0;
       const sampleQty = Math.max(1, Number(tier.minQty) || 1); // Simulasi pesanan kuantitas batas bawah tier
       
-      // 1. Potongan Biaya Persentase (11% Admin + 0.5% Asuransi + 1% AMS = 12.5%)
+      // 1. Potongan Biaya Persentase (11% Admin + 0.5% Asuransi + 1% AMS + 6.5% Promo XTRA+ = 19.0%)
       const percentCutPerUnit = (price * totalPercentageRate) / 100;
       const totalPercentCut = percentCutPerUnit * sampleQty;
 
@@ -1651,7 +1598,7 @@ export default function WholesaleTab({
                 </span>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {/* Biaya Admin 11% */}
                 <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
                   <span className="text-[10px] font-bold text-slate-600 block truncate">Biaya Admin</span>
@@ -1704,6 +1651,26 @@ export default function WholesaleTab({
                     <span className="text-xs font-bold text-slate-500">%</span>
                   </div>
                   <span className="text-[9px] text-slate-400 block mt-0.5">Komisi Shopee</span>
+                </div>
+
+                {/* Promo XTRA+ 6.5% */}
+                <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
+                  <span className="text-[10px] font-bold text-slate-600 block truncate" title="Promo XTRA+ Shopee (Gratis Ongkir / Cashback XTRA)">
+                    Promo XTRA+
+                  </span>
+                  <div className="flex items-center gap-1 mt-1">
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="20"
+                      value={promoXtraPercent}
+                      onChange={e => setPromoXtraPercent(parseFloat(e.target.value) || 0)}
+                      className="w-full text-right px-1.5 py-0.5 text-xs font-mono font-bold bg-white border border-slate-200 rounded text-slate-800 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                    />
+                    <span className="text-xs font-bold text-slate-500">%</span>
+                  </div>
+                  <span className="text-[9px] text-slate-400 block mt-0.5">Cashback/Ongkir</span>
                 </div>
               </div>
             </div>
@@ -2083,11 +2050,11 @@ export default function WholesaleTab({
                             type="number"
                             min="1"
                             step="1"
-                            placeholder={index === tiers.length - 1 ? '≥ dst' : 'Maks'}
+                            placeholder={index === tiers.length - 1 ? 'Maks (opsional)' : 'Maks'}
                             value={t.maxQty !== null && t.maxQty !== undefined ? t.maxQty : ''}
                             onChange={e => updateTier(index, 'maxQty', e.target.value)}
                             className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none hover:border-orange-400 transition-colors"
-                            title="Kuantitas Maksimal. Mengubah angka ini otomatis menyesuaikan rentang tier berikutnya (Maks + 1)."
+                            title="Kuantitas Maksimal (dapat dikustomisasi bebas tanpa terkunci)"
                           />
                           <span className="text-[10px] text-slate-400 font-sans" title={t.maxQty === null ? `Tak terbatas (≥ ${t.minQty} ${activeUnit})` : `Hingga ${t.maxQty} ${activeUnit}`}>
                             {t.maxQty === null && index === tiers.length - 1 ? '(≥ dst)' : activeUnit}
@@ -2190,7 +2157,7 @@ export default function WholesaleTab({
                         - {formatIDR(t.percentCutPerUnit)}
                       </div>
                       <div className="text-[10px] text-slate-400">
-                        {totalPercentageRate}% per unit
+                        {totalPercentageRate.toFixed(1)}% per unit
                       </div>
                     </td>
 
