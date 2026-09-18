@@ -1199,6 +1199,8 @@ export default function ShopeeTab({
 
   useEffect(() => {
     fetchShopeeBalist();
+    // Inisialisasi Otomatis: Sinkronisasi Google Sheet STOCK LIST langsung berjalan saat pertama kali dimuat
+    fetchStockListSheet();
   }, [sheetUrl, cacheKeyPrefix]);
 
   useEffect(() => {

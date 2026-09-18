@@ -2,6 +2,7 @@ import { formatIndoTimestamp } from '../utils/helpers';
 import {
   auth,
   googleProvider,
+  createGoogleProvider,
   signInWithPopup,
   signOut,
   onAuthStateChanged
@@ -16,7 +17,7 @@ const CLIENT_ID =
   firebaseConfigJson.oAuthClientId ||
   '582127839876-sftm5o1jo1e8i1g9b3mjum64qrmblrv3.apps.googleusercontent.com';
 
-const SCOPES = 'https://www.googleapis.com/auth/spreadsheets';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.readonly';
 
 export interface WholesaleTierData {
   id: string;
@@ -40,28 +41,69 @@ export interface GoogleUserProfile {
   picture?: string;
 }
 
+// Keys for persistent storage
+const TOKEN_KEY = 'g_sheets_token';
+const EXP_KEY = 'g_sheets_token_exp';
+const USER_KEY = 'g_sheets_user';
+
+// Safe Expiry Buffer: 2 menit (120.000 ms) sebelum batas kedaluwarsa resmi
+const SAFE_EXPIRY_BUFFER_MS = 2 * 60 * 1000;
+
+// Persistent storage accessors (localStorage with sessionStorage fallback and mirror)
+function getPersistentItem(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const val = localStorage.getItem(key);
+    if (val !== null) return val;
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function setPersistentItem(key: string, val: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(key, val);
+    sessionStorage.setItem(key, val);
+  } catch {}
+}
+
+function removePersistentItem(key: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(key);
+    sessionStorage.removeItem(key);
+  } catch {}
+}
+
 let cachedToken: string | null = null;
 let tokenExpiresAt: number = 0;
 let cachedUserProfile: GoogleUserProfile | null = null;
 let authListeners: Array<(user: GoogleUserProfile | null) => void> = [];
 
-// Initialize Firebase Auth listener to keep state in sync
+// Synchronous session recovery from persistent localStorage
 if (typeof window !== 'undefined') {
   try {
-    onAuthStateChanged(auth, (firebaseUser) => {
-      if (firebaseUser) {
-        const profile: GoogleUserProfile = {
-          email: firebaseUser.email || undefined,
-          name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || undefined,
-          picture: firebaseUser.photoURL || undefined
-        };
-        sessionStorage.setItem('g_sheets_user', JSON.stringify(profile));
-        notifyAuthListeners(profile);
-      }
-    });
-  } catch (e) {
-    console.warn('Firebase onAuthStateChanged init warning', e);
-  }
+    cachedToken = getPersistentItem(TOKEN_KEY);
+    tokenExpiresAt = Number(getPersistentItem(EXP_KEY) || '0');
+    const userStr = getPersistentItem(USER_KEY);
+    if (userStr) {
+      cachedUserProfile = JSON.parse(userStr);
+    }
+  } catch {}
+
+  // Multi-tab real-time session synchronization
+  window.addEventListener('storage', (e) => {
+    if (e.key === USER_KEY || e.key === TOKEN_KEY || e.key === EXP_KEY) {
+      cachedToken = getPersistentItem(TOKEN_KEY);
+      tokenExpiresAt = Number(getPersistentItem(EXP_KEY) || '0');
+      const userStr = getPersistentItem(USER_KEY);
+      const newUser = userStr ? JSON.parse(userStr) : null;
+      cachedUserProfile = newUser;
+      notifyAuthListeners(newUser);
+    }
+  });
 }
 
 export function subscribeGoogleAuth(callback: (user: GoogleUserProfile | null) => void): () => void {
@@ -87,7 +129,7 @@ function notifyAuthListeners(user: GoogleUserProfile | null) {
 export function getStoredGoogleUser(): GoogleUserProfile | null {
   if (cachedUserProfile) return cachedUserProfile;
   try {
-    const str = sessionStorage.getItem('g_sheets_user');
+    const str = getPersistentItem(USER_KEY);
     if (str) {
       cachedUserProfile = JSON.parse(str);
       return cachedUserProfile;
@@ -106,10 +148,98 @@ export function getStoredGoogleUser(): GoogleUserProfile | null {
 
 export function hasValidGoogleToken(): boolean {
   if (!cachedToken) {
-    cachedToken = sessionStorage.getItem('g_sheets_token');
-    tokenExpiresAt = Number(sessionStorage.getItem('g_sheets_token_exp') || '0');
+    cachedToken = getPersistentItem(TOKEN_KEY);
+    tokenExpiresAt = Number(getPersistentItem(EXP_KEY) || '0');
   }
-  return Boolean(cachedToken && Date.now() < tokenExpiresAt - 60000);
+  // Safe buffer 2 menit: masa kedaluwarsa otomatis dengan buffer aman 2 menit
+  return Boolean(cachedToken && Date.now() < (tokenExpiresAt - SAFE_EXPIRY_BUFFER_MS));
+}
+
+/**
+ * Inisialisasi Otomatis (initAuth):
+ * - Langsung mengevaluasi status pengguna Firebase Auth dan memulihkan token aktif secara asynchronous saat pertama kali dimuat.
+ * - Sesi langsung aktif seketika tanpa jeda ataupun kehilangan status otentikasi.
+ * - Pembacaan folder Google Drive dan sinkronisasi Google Sheet "STOCK LIST" langsung berjalan otomatis tanpa mengharuskan pengguna mengklik tombol login ulang.
+ */
+export async function initAuth(): Promise<{ user: GoogleUserProfile | null; isAuthed: boolean; token: string | null }> {
+  // 1. Pulihkan sesi lokal persisten seketika
+  cachedToken = getPersistentItem(TOKEN_KEY);
+  tokenExpiresAt = Number(getPersistentItem(EXP_KEY) || '0');
+  const storedUser = getStoredGoogleUser();
+  if (storedUser) {
+    notifyAuthListeners(storedUser);
+  }
+
+  // 2. Evaluasi status pengguna Firebase Auth secara asynchronous
+  return new Promise((resolve) => {
+    let resolved = false;
+
+    // Resolusi cepat jika Firebase currentUser sudah aktif
+    if (auth.currentUser) {
+      const profile: GoogleUserProfile = {
+        email: auth.currentUser.email || undefined,
+        name: auth.currentUser.displayName || auth.currentUser.email?.split('@')[0] || undefined,
+        picture: auth.currentUser.photoURL || undefined
+      };
+      setPersistentItem(USER_KEY, JSON.stringify(profile));
+      notifyAuthListeners(profile);
+      const isTokenValid = hasValidGoogleToken();
+      return resolve({
+        user: profile,
+        isAuthed: isTokenValid || true,
+        token: isTokenValid ? cachedToken : null
+      });
+    }
+
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        const isTokenValid = hasValidGoogleToken();
+        const activeUser = getStoredGoogleUser();
+        resolve({
+          user: activeUser,
+          isAuthed: isTokenValid || Boolean(activeUser),
+          token: isTokenValid ? cachedToken : null
+        });
+      }
+    }, 1200);
+
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        unsubscribe();
+        if (firebaseUser) {
+          const profile: GoogleUserProfile = {
+            email: firebaseUser.email || undefined,
+            name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || undefined,
+            picture: firebaseUser.photoURL || undefined
+          };
+          setPersistentItem(USER_KEY, JSON.stringify(profile));
+          notifyAuthListeners(profile);
+          const isTokenValid = hasValidGoogleToken();
+          resolve({
+            user: profile,
+            isAuthed: isTokenValid || true,
+            token: isTokenValid ? cachedToken : null
+          });
+        } else {
+          const isTokenValid = hasValidGoogleToken();
+          const activeUser = getStoredGoogleUser();
+          resolve({
+            user: activeUser,
+            isAuthed: isTokenValid || Boolean(activeUser),
+            token: isTokenValid ? cachedToken : null
+          });
+        }
+      }
+    });
+  });
+}
+
+// Jalankan inisialisasi otomatis pada pemuatan modul
+if (typeof window !== 'undefined') {
+  initAuth().catch(err => console.warn('Inisialisasi otomatis Google Auth background:', err));
 }
 
 /**
@@ -128,7 +258,7 @@ export async function fetchGoogleUserProfile(token: string): Promise<GoogleUserP
         name: data.name || data.given_name,
         picture: data.picture
       };
-      sessionStorage.setItem('g_sheets_user', JSON.stringify(profile));
+      setPersistentItem(USER_KEY, JSON.stringify(profile));
       notifyAuthListeners(profile);
       return profile;
     }
@@ -146,7 +276,7 @@ export async function fetchGoogleUserProfile(token: string): Promise<GoogleUserP
           email: infoData.email,
           name: infoData.email.split('@')[0]
         };
-        sessionStorage.setItem('g_sheets_user', JSON.stringify(profile));
+        setPersistentItem(USER_KEY, JSON.stringify(profile));
         notifyAuthListeners(profile);
         return profile;
       }
@@ -156,7 +286,7 @@ export async function fetchGoogleUserProfile(token: string): Promise<GoogleUserP
   }
 
   const fallback: GoogleUserProfile = { email: 'Google Terhubung' };
-  sessionStorage.setItem('g_sheets_user', JSON.stringify(fallback));
+  setPersistentItem(USER_KEY, JSON.stringify(fallback));
   notifyAuthListeners(fallback);
   return fallback;
 }
@@ -173,19 +303,27 @@ export function logoutGoogle(): void {
   cachedToken = null;
   tokenExpiresAt = 0;
   cachedUserProfile = null;
-  sessionStorage.removeItem('g_sheets_token');
-  sessionStorage.removeItem('g_sheets_token_exp');
-  sessionStorage.removeItem('g_sheets_user');
+  removePersistentItem(TOKEN_KEY);
+  removePersistentItem(EXP_KEY);
+  removePersistentItem(USER_KEY);
   notifyAuthListeners(null);
 }
 
 /**
  * Login with Firebase Google Auth (Popup).
- * Requests Google Sheets permission so user can directly save wholesale prices.
+ * - Pemilihan Akun Cerdas (login_hint): Parameter login_hint otomatis disuntikkan menggunakan email akun aktif/tersimpan.
+ * - Bebas Popup Persetujuan Berulang: Parameter persetujuan paksa (prompt: 'consent') dihilangkan untuk alur reguler.
  */
-export async function loginWithGoogle(): Promise<GoogleUserProfile | null> {
+export async function loginWithGoogle(customLoginHint?: string): Promise<GoogleUserProfile | null> {
   try {
-    const result = await signInWithPopup(auth, googleProvider);
+    // Ambil hint email dari parameter, akun yang tersimpan, atau Firebase currentUser
+    const storedUser = getStoredGoogleUser();
+    const activeEmail = customLoginHint || storedUser?.email || auth.currentUser?.email;
+
+    // Buat provider cerdas dengan login_hint dan tanpa paksaan prompt: 'consent'
+    const provider = createGoogleProvider(activeEmail);
+
+    const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     const token = credential?.accessToken;
 
@@ -198,11 +336,11 @@ export async function loginWithGoogle(): Promise<GoogleUserProfile | null> {
     if (token) {
       cachedToken = token;
       tokenExpiresAt = Date.now() + 3500 * 1000;
-      sessionStorage.setItem('g_sheets_token', token);
-      sessionStorage.setItem('g_sheets_token_exp', String(tokenExpiresAt));
+      setPersistentItem(TOKEN_KEY, token);
+      setPersistentItem(EXP_KEY, String(tokenExpiresAt));
     }
 
-    sessionStorage.setItem('g_sheets_user', JSON.stringify(profile));
+    setPersistentItem(USER_KEY, JSON.stringify(profile));
     notifyAuthListeners(profile);
     return profile;
   } catch (firebaseErr: any) {
@@ -282,6 +420,7 @@ export async function ensureGsiClient(): Promise<void> {
 
 /**
  * Request an access token using Google Identity Services (GIS fallback)
+ * Menggunakan smart hint email & tanpa popup paksaan 'consent'
  */
 async function getGisAccessToken(interactive = true): Promise<string> {
   await ensureGsiClient();
@@ -291,11 +430,15 @@ async function getGisAccessToken(interactive = true): Promise<string> {
     throw new Error('Google Identity Services belum siap.');
   }
 
+  const storedUser = getStoredGoogleUser();
+  const activeEmail = storedUser?.email || auth.currentUser?.email;
+
   return new Promise<string>((resolve, reject) => {
     try {
       const tokenClient = google.accounts.oauth2.initTokenClient({
         client_id: CLIENT_ID,
         scope: SCOPES,
+        hint: activeEmail || undefined, // Pemilihan Akun Cerdas (login_hint)
         callback: (tokenResponse: any) => {
           if (tokenResponse.error) {
             return reject(new Error(tokenResponse.error_description || tokenResponse.error));
@@ -307,8 +450,8 @@ async function getGisAccessToken(interactive = true): Promise<string> {
           cachedToken = tokenResponse.access_token;
           const expiresIn = Number(tokenResponse.expires_in) || 3600;
           tokenExpiresAt = Date.now() + expiresIn * 1000;
-          sessionStorage.setItem('g_sheets_token', cachedToken!);
-          sessionStorage.setItem('g_sheets_token_exp', String(tokenExpiresAt));
+          setPersistentItem(TOKEN_KEY, cachedToken!);
+          setPersistentItem(EXP_KEY, String(tokenExpiresAt));
           fetchGoogleUserProfile(cachedToken!).catch(() => {});
           resolve(cachedToken!);
         },
@@ -317,7 +460,11 @@ async function getGisAccessToken(interactive = true): Promise<string> {
         }
       });
 
-      tokenClient.requestAccessToken({ prompt: interactive ? '' : 'none' });
+      // Bebas Popup Persetujuan Berulang: prompt kosong/none, tanpa 'consent'
+      tokenClient.requestAccessToken({
+        prompt: interactive ? '' : 'none',
+        hint: activeEmail || undefined
+      });
     } catch (err: any) {
       reject(err);
     }
@@ -325,27 +472,59 @@ async function getGisAccessToken(interactive = true): Promise<string> {
 }
 
 /**
- * Primary token getter: retrieves active token or triggers login if expired
+ * Primary token getter: retrieves active token or triggers login if expired (evaluates safe buffer 2 menit)
  */
 export async function getGoogleSheetsAccessToken(interactive = true): Promise<string> {
   if (!cachedToken) {
-    cachedToken = sessionStorage.getItem('g_sheets_token');
-    tokenExpiresAt = Number(sessionStorage.getItem('g_sheets_token_exp') || '0');
+    cachedToken = getPersistentItem(TOKEN_KEY);
+    tokenExpiresAt = Number(getPersistentItem(EXP_KEY) || '0');
   }
 
-  // If token is still valid with 1 min safety margin, return it
-  if (cachedToken && Date.now() < tokenExpiresAt - 60000) {
+  // Jika token masih valid dengan buffer aman 2 menit, kembalikan langsung
+  if (cachedToken && Date.now() < tokenExpiresAt - SAFE_EXPIRY_BUFFER_MS) {
     return cachedToken;
   }
 
   if (interactive) {
-    await loginWithGoogle();
-    if (cachedToken && Date.now() < tokenExpiresAt - 60000) {
+    const activeEmail = getStoredGoogleUser()?.email;
+    await loginWithGoogle(activeEmail);
+    if (cachedToken && Date.now() < tokenExpiresAt - SAFE_EXPIRY_BUFFER_MS) {
       return cachedToken;
     }
   }
 
   return await getGisAccessToken(interactive);
+}
+
+/**
+ * Helper untuk membaca folder Google Drive secara otomatis
+ */
+export async function fetchGoogleDriveFolder(folderId?: string): Promise<{ files: any[] }> {
+  const token = await getGoogleSheetsAccessToken(true);
+  const q = folderId ? `'${folderId}' in parents and trashed = false` : `trashed = false`;
+  const res = await fetch(
+    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name,mimeType,modifiedTime,size,webViewLink)&pageSize=100`,
+    {
+      headers: { Authorization: `Bearer ${token}` }
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`Gagal membaca folder Google Drive (Status ${res.status})`);
+  }
+  return await res.json();
+}
+
+/**
+ * Helper sinkronisasi Google Sheet "STOCK LIST"
+ */
+export async function fetchStockListGoogleSheet(): Promise<string> {
+  const stockListCsvUrl =
+    'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCxz1GPm7QU9IS1yBiSjvIdNTLUsvvplOCyT_R3XH4O-LuVbHoY_bXn1LTH5lpnlolJ29BhUgEdnFm/pub?gid=1564332470&single=true&output=csv';
+  const res = await fetch(`${stockListCsvUrl}&t=${Date.now()}`);
+  if (!res.ok) {
+    throw new Error(`Gagal sinkronisasi Google Sheet STOCK LIST (Status ${res.status})`);
+  }
+  return await res.text();
 }
 
 /**
@@ -421,8 +600,8 @@ export async function appendWholesaleToSpreadsheet(
 
     if (metaRes.status === 401) {
       // Token might be expired, retry once with fresh token
-      sessionStorage.removeItem('g_sheets_token');
-      sessionStorage.removeItem('g_sheets_token_exp');
+      removePersistentItem(TOKEN_KEY);
+      removePersistentItem(EXP_KEY);
       cachedToken = null;
       token = await getGoogleSheetsAccessToken(true);
       const retryMetaRes = await fetch(

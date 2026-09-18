@@ -6,6 +6,7 @@ import {
   loginWithGoogle,
   logoutGoogle,
   subscribeGoogleAuth,
+  initAuth,
   GoogleUserProfile,
   TARGET_SPREADSHEET_ID
 } from '../services/googleSheetsService';
@@ -28,6 +29,15 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
   const [showDomainModal, setShowDomainModal] = useState<boolean>(false);
 
   useEffect(() => {
+    // Inisialisasi Otomatis (initAuth) untuk mengevaluasi status Firebase Auth & sesi persisten
+    initAuth().then(res => {
+      if (res.user) {
+        setUser(res.user);
+        setIsAuthed(true);
+        if (onAuthChange) onAuthChange(true);
+      }
+    }).catch(() => {});
+
     // Subscribe to auth changes across the app
     const unsubscribe = subscribeGoogleAuth((newUser) => {
       setUser(newUser);
@@ -55,7 +65,9 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
     setAuthError(null);
     setIsDomainError(false);
     try {
-      const profile = await loginWithGoogle();
+      // Mengirimkan login_hint cerdas jika ada email tersimpan
+      const hintEmail = user?.email || getStoredGoogleUser()?.email;
+      const profile = await loginWithGoogle(hintEmail);
       setUser(profile);
       setIsAuthed(true);
       if (onAuthChange) onAuthChange(true);

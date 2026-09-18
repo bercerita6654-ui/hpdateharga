@@ -543,31 +543,127 @@ export default function WholesaleTab({
     showToast('Tingkat harga grosir dihapus');
   };
 
-  // Update tier fields
+  // Update tier fields with automatic sequential range cascading
   const updateTier = (index: number, field: keyof WholesaleTier, value: any) => {
-    const updated = [...tiers];
-    const item = { ...updated[index] };
+    const updated = tiers.map(t => ({ ...t }));
+    const current = { ...updated[index] };
+
+    if (field === 'price') {
+      current.price = Math.max(0, parseInt(value, 10) || 0);
+      updated[index] = current;
+      setTiers(updated);
+      return;
+    }
+
+    if (field === 'maxQty') {
+      if (value === '' || value === null || value === undefined) {
+        current.maxQty = null;
+        updated[index] = current;
+      } else {
+        const parsed = parseInt(value, 10);
+        if (isNaN(parsed) || parsed < 1) {
+          current.maxQty = null;
+          updated[index] = current;
+        } else {
+          current.maxQty = parsed;
+
+          // Pastikan minQty tier saat ini lebih kecil dari maxQty
+          if (typeof current.minQty === 'number' && current.minQty >= parsed) {
+            current.minQty = Math.max(index === 0 ? 2 : 1, parsed - 1);
+            if (index > 0) {
+              updated[index - 1].maxQty = current.minQty - 1;
+            }
+          }
+          updated[index] = current;
+
+          // Otomatis ubah rentang kuantitas tier berikutnya secara berantai (cascade):
+          // Contoh: Tier 1 rentang 3 - 11 => Tier 2 otomatis mulai 12 - 24, Tier 3 otomatis mulai 25 - 100, dst.
+          for (let nextIdx = index + 1; nextIdx < updated.length; nextIdx++) {
+            const prev = updated[nextIdx - 1];
+            if (typeof prev.maxQty === 'number' && prev.maxQty >= 1) {
+              const expectedMin = prev.maxQty + 1;
+              const nextTier = { ...updated[nextIdx] };
+              const currentMin = typeof nextTier.minQty === 'number' ? nextTier.minQty : 1;
+              const currentMax = typeof nextTier.maxQty === 'number' ? nextTier.maxQty : null;
+
+              // Hitung span proporsional: Tier 2 (+12 pcs), Tier 3 (+75 pcs), Tier 4+ (+100 pcs)
+              const defaultSpan = nextIdx === 1 ? 12 : nextIdx === 2 ? 75 : 100;
+              const prevSpan = (currentMax !== null && currentMax > currentMin)
+                ? (currentMax - currentMin)
+                : defaultSpan;
+
+              nextTier.minQty = expectedMin;
+
+              // Jika maxQty tier berikutnya lebih kecil atau sama dengan minQty barunya, geser otomatis
+              if (currentMax !== null && currentMax <= expectedMin) {
+                nextTier.maxQty = expectedMin + prevSpan;
+              }
+
+              updated[nextIdx] = nextTier;
+            }
+          }
+        }
+      }
+      setTiers(updated);
+      return;
+    }
 
     if (field === 'minQty') {
       if (value === '' || value === null || value === undefined) {
-        item.minQty = '' as any;
+        current.minQty = '' as any;
+        updated[index] = current;
       } else {
         const parsed = parseInt(value, 10);
-        item.minQty = isNaN(parsed) ? ('' as any) : Math.max(1, parsed);
-      }
-    } else if (field === 'maxQty') {
-      if (value === '' || value === null || value === undefined) {
-        item.maxQty = null;
-      } else {
-        const parsed = parseInt(value, 10);
-        item.maxQty = isNaN(parsed) ? null : Math.max(1, parsed);
-      }
-    } else if (field === 'price') {
-      item.price = Math.max(0, parseInt(value, 10) || 0);
-    }
+        if (isNaN(parsed) || parsed < 1) {
+          current.minQty = 1;
+          updated[index] = current;
+        } else {
+          current.minQty = parsed;
 
-    updated[index] = item;
-    setTiers(updated);
+          // Jika mengedit minQty pada Tier 2 ke atas (index > 0):
+          // Otomatis sinkronkan Max Qty tier sebelumnya (index - 1) = parsed - 1
+          if (index > 0) {
+            const prevTier = { ...updated[index - 1] };
+            prevTier.maxQty = Math.max(1, parsed - 1);
+            if (typeof prevTier.minQty === 'number' && prevTier.minQty >= prevTier.maxQty) {
+              prevTier.minQty = Math.max(index - 1 === 0 ? 2 : 1, prevTier.maxQty - 1);
+            }
+            updated[index - 1] = prevTier;
+          }
+
+          // Pastikan maxQty tier saat ini tetap lebih besar dari minQty barunya
+          if (typeof current.maxQty === 'number' && current.maxQty <= parsed) {
+            const defaultSpan = index === 0 ? 8 : index === 1 ? 12 : 75;
+            current.maxQty = parsed + defaultSpan;
+          }
+          updated[index] = current;
+
+          // Cascade penyesuaian ke tier-tier berikutnya
+          for (let nextIdx = index + 1; nextIdx < updated.length; nextIdx++) {
+            const prev = updated[nextIdx - 1];
+            if (typeof prev.maxQty === 'number' && prev.maxQty >= 1) {
+              const expectedMin = prev.maxQty + 1;
+              const nextTier = { ...updated[nextIdx] };
+              const currentMin = typeof nextTier.minQty === 'number' ? nextTier.minQty : 1;
+              const currentMax = typeof nextTier.maxQty === 'number' ? nextTier.maxQty : null;
+
+              const defaultSpan = nextIdx === 1 ? 12 : nextIdx === 2 ? 75 : 100;
+              const prevSpan = (currentMax !== null && currentMax > currentMin)
+                ? (currentMax - currentMin)
+                : defaultSpan;
+
+              nextTier.minQty = expectedMin;
+              if (currentMax !== null && currentMax <= expectedMin) {
+                nextTier.maxQty = expectedMin + prevSpan;
+              }
+              updated[nextIdx] = nextTier;
+            }
+          }
+        }
+      }
+      setTiers(updated);
+      return;
+    }
   };
 
   // Filtered dropdown for product search
@@ -1754,8 +1850,8 @@ export default function WholesaleTab({
                     <span>Rentang Qty ({activeUnit})</span>
                     <Edit3 className="w-3 h-3 text-orange-500" />
                   </div>
-                  <div className="text-[9px] text-slate-400 font-normal lowercase tracking-normal">
-                    bisa dicustom bebas
+                  <div className="text-[9px] text-orange-700 font-medium tracking-normal">
+                    otomatis berantai (Maks + 1)
                   </div>
                 </th>
                 <th className="p-3.5">
@@ -1836,7 +1932,7 @@ export default function WholesaleTab({
                       </div>
                     </td>
 
-                    {/* Min & Max Qty Inputs (Customizable) */}
+                    {/* Min & Max Qty Inputs (Customizable & Auto-Chained) */}
                     <td className="p-3.5">
                       <div className="flex items-center gap-1.5 font-mono">
                         <div className="relative">
@@ -1847,8 +1943,12 @@ export default function WholesaleTab({
                             placeholder="Min"
                             value={t.minQty !== undefined && t.minQty !== null ? t.minQty : ''}
                             onChange={e => updateTier(index, 'minQty', e.target.value)}
-                            className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none hover:border-slate-300"
-                            title="Kuantitas Minimal (Min Qty)"
+                            className={`w-16 px-2 py-1.5 border rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none transition-colors ${
+                              index > 0
+                                ? 'bg-orange-50/50 border-orange-200/80 hover:border-orange-400'
+                                : 'bg-white border-slate-200 hover:border-slate-300'
+                            }`}
+                            title={index > 0 ? `Kuantitas Minimal (Otomatis mulai dari Tier ${index} Maks + 1)` : "Kuantitas Minimal (Min Qty)"}
                           />
                         </div>
                         <span className="text-slate-400 text-xs font-bold">-</span>
@@ -1860,8 +1960,8 @@ export default function WholesaleTab({
                             placeholder={index === tiers.length - 1 ? '≥ dst' : 'Maks'}
                             value={t.maxQty !== null && t.maxQty !== undefined ? t.maxQty : ''}
                             onChange={e => updateTier(index, 'maxQty', e.target.value)}
-                            className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none hover:border-slate-300"
-                            title={index === tiers.length - 1 ? "Kuantitas Maksimal (Bisa diisi angka kustom misal 100 atau kosongkan jika tak terbatas)" : "Kuantitas Maksimal (Max Qty)"}
+                            className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 text-center shadow-inner focus:ring-1 focus:ring-orange-500 outline-none hover:border-orange-400 transition-colors"
+                            title="Kuantitas Maksimal. Mengubah angka ini otomatis menyesuaikan rentang tier berikutnya (Maks + 1)."
                           />
                           <span className="text-[10px] text-slate-400 font-sans" title={t.maxQty === null ? `Tak terbatas (≥ ${t.minQty} ${activeUnit})` : `Hingga ${t.maxQty} ${activeUnit}`}>
                             {t.maxQty === null && index === tiers.length - 1 ? '(≥ dst)' : activeUnit}
