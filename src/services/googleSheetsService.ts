@@ -1,4 +1,4 @@
-import { formatIndoTimestamp } from '../utils/helpers';
+import { formatIndoTimestamp, sanitizeSku } from '../utils/helpers';
 import {
   auth,
   googleProvider,
@@ -540,7 +540,10 @@ export async function fetchStockListGoogleSheet(): Promise<string> {
  */
 export function prepareWholesaleRowValues(payload: WholesaleSheetPayload): string[] {
   const dateStr = formatIndoTimestamp(payload.date || new Date());
-  const skuStr = payload.sku || '-';
+  const rawSku = sanitizeSku(payload.sku);
+  // Ensure SKU preserves leading zeros (e.g., 06078 remains 06078, not converted to 6078)
+  // In Google Sheets API with USER_ENTERED, prefixing with "'" forces text format without displaying the apostrophe
+  const skuStr = rawSku && rawSku !== '-' ? (rawSku.startsWith("'") ? rawSku : `'${rawSku}`) : '-';
   const nameStr = payload.productName || '-';
   const unitStr = (payload.unit || 'PCS').toUpperCase();
   const normalPriceStr = Math.round(payload.normalPrice || 0).toLocaleString('id-ID');
@@ -758,7 +761,7 @@ export function recordSavedSkus(skus: string[]): void {
   try {
     const current = new Set(getSavedSkusFromStorage());
     skus.forEach(s => {
-      const clean = s?.trim();
+      const clean = s?.trim().replace(/^'+/, '');
       if (clean && clean !== '-') current.add(clean);
     });
     localStorage.setItem(SAVED_SKUS_STORAGE_KEY, JSON.stringify(Array.from(current)));
@@ -792,7 +795,10 @@ export async function fetchSpreadsheetExistingSkus(
       const rows: string[][] = data.values || [];
       const extractedSkus: string[] = [];
       rows.forEach(r => {
-        const sku = r?.[0]?.trim();
+        let sku = r?.[0]?.trim();
+        if (sku) {
+          sku = sku.replace(/^'+/, '');
+        }
         if (sku && sku !== '-' && !sku.toLowerCase().includes('sku')) {
           extractedSkus.push(sku);
         }
