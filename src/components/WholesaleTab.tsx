@@ -1040,10 +1040,8 @@ export default function WholesaleTab({
 
   // Clear basket
   const handleClearBasket = () => {
-    if (window.confirm('Kosongkan semua produk dari keranjang grosir?')) {
-      setWholesaleBasket([]);
-      showToast('Keranjang grosir dikosongkan');
-    }
+    setWholesaleBasket([]);
+    showToast('Keranjang antrean grosir berhasil dikosongkan. Siap menambah data baru!');
   };
 
   // Load item from basket into editor

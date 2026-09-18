@@ -68,6 +68,10 @@ export default function WholesaleBasketModal({
   // Selected items for bulk actions (checkboxes)
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
+  // Confirmation dialogs (to avoid iframe window.confirm blocks)
+  const [showClearConfirm, setShowClearConfirm] = useState<boolean>(false);
+  const [showDeleteSelectedConfirm, setShowDeleteSelectedConfirm] = useState<boolean>(false);
+
   // Bulk Edit Panel open/closed state
   const [isBulkEditOpen, setIsBulkEditOpen] = useState<boolean>(false);
 
@@ -211,20 +215,36 @@ export default function WholesaleBasketModal({
   // Delete selected items
   const handleDeleteSelected = () => {
     if (selectedIds.length === 0) return;
-    if (window.confirm(`Hapus ${selectedIds.length} produk terpilih dari antrean?`)) {
-      setWholesaleBasket(prev => prev.filter(item => !selectedIds.includes(item.id)));
-      setSelectedIds([]);
-      showToast(`${selectedIds.length} produk dihapus dari antrean`);
-    }
+    setShowDeleteSelectedConfirm(true);
+  };
+
+  const handleConfirmDeleteSelected = () => {
+    const count = selectedIds.length;
+    setWholesaleBasket(prev => prev.filter(item => !selectedIds.includes(item.id)));
+    setSelectedIds([]);
+    setShowDeleteSelectedConfirm(false);
+    showToast(`${count} produk terpilih berhasil dihapus dari antrean`);
   };
 
   // Clear entire basket
   const handleClearAll = () => {
-    if (window.confirm('Kosongkan semua produk dari keranjang antrean grosir?')) {
-      setWholesaleBasket([]);
-      setSelectedIds([]);
-      showToast('Keranjang grosir dikosongkan');
+    if (wholesaleBasket.length === 0) {
+      showToast('Keranjang grosir sudah kosong');
+      return;
     }
+    setShowClearConfirm(true);
+  };
+
+  const handleConfirmClearAll = () => {
+    setWholesaleBasket([]);
+    setSelectedIds([]);
+    setShowClearConfirm(false);
+    try {
+      localStorage.removeItem('marp_wholesale_basket');
+    } catch {
+      // ignore
+    }
+    showToast('Seluruh produk di keranjang antrean berhasil dikosongkan. Siap menambah data baru!');
   };
 
   // --- PER-PRODUCT T1, T2, T3 UPDATE HANDLERS ---
@@ -466,7 +486,7 @@ export default function WholesaleBasketModal({
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200 relative">
         
         {/* MODAL HEADER */}
         <div className="p-4 sm:p-5 border-b border-slate-200 bg-gradient-to-r from-indigo-50/90 via-slate-50 to-purple-50/80 flex flex-col md:flex-row md:items-center justify-between gap-3">
@@ -1322,6 +1342,72 @@ export default function WholesaleBasketModal({
             </button>
           </div>
         </div>
+
+        {/* IN-APP CONFIRMATION DIALOG: KOSONGKAN SEMUA */}
+        {showClearConfirm && (
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+            <div className="bg-white rounded-2xl p-5 sm:p-6 max-w-sm w-full shadow-2xl border border-slate-200 text-center space-y-4 animate-in zoom-in-95 duration-150">
+              <div className="w-14 h-14 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                <Trash2 className="w-7 h-7" />
+              </div>
+              <div className="space-y-1.5">
+                <h4 className="font-extrabold text-slate-800 text-base">Kosongkan Keranjang Antrean?</h4>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Seluruh <strong>{wholesaleBasket.length} produk</strong> di antrean akan dihapus dari memori keranjang sehingga Anda dapat mulai menambahkan data baru dari awal.
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowClearConfirm(false)}
+                  className="flex-1 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmClearAll}
+                  className="flex-1 py-2.5 px-3 bg-red-600 hover:bg-red-700 text-white font-extrabold rounded-xl text-xs transition-all shadow-sm active:scale-95 cursor-pointer"
+                >
+                  Ya, Kosongkan Semua
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* IN-APP CONFIRMATION DIALOG: HAPUS PRODUK TERPILIH */}
+        {showDeleteSelectedConfirm && (
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+            <div className="bg-white rounded-2xl p-5 sm:p-6 max-w-sm w-full shadow-2xl border border-slate-200 text-center space-y-4 animate-in zoom-in-95 duration-150">
+              <div className="w-14 h-14 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                <Trash2 className="w-7 h-7" />
+              </div>
+              <div className="space-y-1.5">
+                <h4 className="font-extrabold text-slate-800 text-base">Hapus Produk Terpilih?</h4>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  <strong>{selectedIds.length} produk</strong> yang Anda centang akan dihapus dari antrean grosir.
+                </p>
+              </div>
+              <div className="flex items-center gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteSelectedConfirm(false)}
+                  className="flex-1 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmDeleteSelected}
+                  className="flex-1 py-2.5 px-3 bg-red-600 hover:bg-red-700 text-white font-extrabold rounded-xl text-xs transition-all shadow-sm active:scale-95 cursor-pointer"
+                >
+                  Ya, Hapus ({selectedIds.length})
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
