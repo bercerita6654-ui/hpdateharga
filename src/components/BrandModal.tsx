@@ -8,17 +8,35 @@ import { Search, X, Package, Plus } from 'lucide-react';
 import { Product } from '../types';
 
 interface BrandModalProps {
-  show: boolean;
+  show?: boolean;
+  isOpen?: boolean;
   onClose: () => void;
   productList: Product[];
-  onAdd: (products: Product[]) => void;
+  skuCategoryMap?: Record<string, string>;
+  onAdd?: (products: Product[]) => void;
+  onSelectProduct?: (sku: string) => void;
+  onBulkAddProducts?: (products: Product[], brandName: string) => void;
+  title?: string;
+  bulkActionLabel?: string;
 }
 
-export default function BrandModal({ show, onClose, productList, onAdd }: BrandModalProps) {
+export default function BrandModal({
+  show,
+  isOpen,
+  onClose,
+  productList,
+  skuCategoryMap,
+  onAdd,
+  onSelectProduct,
+  onBulkAddProducts,
+  title = 'Tambah Banyak (Pencarian / Merk)',
+  bulkActionLabel
+}: BrandModalProps) {
   const [brandSearchTerm, setBrandSearchTerm] = useState('');
   const [brandSearchResults, setBrandSearchResults] = useState<Product[]>([]);
 
-  if (!show) return null;
+  const isModalOpen = isOpen !== undefined ? isOpen : !!show;
+  if (!isModalOpen) return null;
 
   const handleBrandSearch = (term: string) => {
     setBrandSearchTerm(term);
@@ -27,15 +45,23 @@ export default function BrandModal({ show, onClose, productList, onAdd }: BrandM
       return;
     }
     const lowerTerm = term.toLowerCase().trim();
-    const results = productList.filter(p =>
-      String(p.name).toLowerCase().includes(lowerTerm) ||
-      String(p.sku).toLowerCase().includes(lowerTerm)
-    );
+    const results = productList.filter(p => {
+      const matchName = String(p.name || '').toLowerCase().includes(lowerTerm);
+      const matchSku = String(p.sku || '').toLowerCase().includes(lowerTerm);
+      const matchCat = skuCategoryMap && p.sku && skuCategoryMap[p.sku]
+        ? String(skuCategoryMap[p.sku]).toLowerCase().includes(lowerTerm)
+        : false;
+      return matchName || matchSku || matchCat;
+    });
     setBrandSearchResults(results);
   };
 
   const handleAddAll = () => {
-    onAdd(brandSearchResults);
+    if (onBulkAddProducts) {
+      onBulkAddProducts(brandSearchResults, brandSearchTerm || 'Pencarian');
+    } else if (onAdd) {
+      onAdd(brandSearchResults);
+    }
     setBrandSearchTerm('');
     setBrandSearchResults([]);
     onClose();
@@ -46,7 +72,7 @@ export default function BrandModal({ show, onClose, productList, onAdd }: BrandM
       <div className="bg-white rounded-xl shadow-lg w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200">
         <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-white">
           <h3 className="font-bold text-slate-900 uppercase tracking-wider text-sm flex items-center">
-            <Search className="w-4 h-4 mr-2 text-indigo-600" /> Tambah Banyak (Pencarian)
+            <Search className="w-4 h-4 mr-2 text-indigo-600" /> {title}
           </h3>
           <button
             onClick={() => {
@@ -96,7 +122,14 @@ export default function BrandModal({ show, onClose, productList, onAdd }: BrandM
                 {brandSearchResults.slice(0, 100).map((p, i) => (
                   <div
                     key={i}
-                    className="text-[11px] p-2 bg-slate-50 hover:bg-indigo-50 border border-slate-100 rounded-md flex justify-between items-center transition-colors"
+                    onClick={() => {
+                      if (onSelectProduct && p.sku) {
+                        onSelectProduct(p.sku);
+                      }
+                    }}
+                    className={`text-[11px] p-2 bg-slate-50 hover:bg-indigo-50 border border-slate-100 rounded-md flex justify-between items-center transition-colors ${
+                      onSelectProduct ? 'cursor-pointer hover:border-indigo-200' : ''
+                    }`}
                   >
                     <span className="truncate pr-3 font-medium text-slate-700">{p.name}</span>
                     <span className="text-[9px] px-1.5 py-0.5 bg-white border border-slate-200 text-slate-500 rounded font-mono flex-shrink-0">
@@ -125,7 +158,7 @@ export default function BrandModal({ show, onClose, productList, onAdd }: BrandM
             disabled={brandSearchResults.length === 0}
             className="px-5 py-2 text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg transition-all disabled:opacity-50 flex items-center shadow-sm active:scale-95"
           >
-            <Plus className="w-4 h-4 mr-1.5" /> Tambah Semua ({brandSearchResults.length})
+            <Plus className="w-4 h-4 mr-1.5" /> {bulkActionLabel || `Tambah Semua (${brandSearchResults.length})`}
           </button>
         </div>
       </div>

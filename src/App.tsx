@@ -2713,6 +2713,8 @@ export default function App() {
             setProduct={setProduct}
             setActiveView={setActiveView}
             rounding={rounding}
+            categories={categories}
+            skuCategoryMap={skuCategoryMap}
           />
         )}
 

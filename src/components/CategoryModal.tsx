@@ -8,26 +8,37 @@ import { Tag, X, LayoutGrid, Package, Plus, ChevronDown } from 'lucide-react';
 import { Product } from '../types';
 
 interface CategoryModalProps {
-  show: boolean;
+  show?: boolean;
+  isOpen?: boolean;
   onClose: () => void;
   categories: string[];
   skuCategoryMap: Record<string, string>;
   productList: Product[];
-  onAdd: (products: Product[]) => void;
+  onAdd?: (products: Product[]) => void;
+  onSelectProduct?: (sku: string) => void;
+  onBulkAddProducts?: (products: Product[], categoryName: string) => void;
+  title?: string;
+  bulkActionLabel?: string;
 }
 
 export default function CategoryModal({
   show,
+  isOpen,
   onClose,
   categories,
   skuCategoryMap,
   productList,
-  onAdd
+  onAdd,
+  onSelectProduct,
+  onBulkAddProducts,
+  title = 'Tambah Banyak (Kategori)',
+  bulkActionLabel
 }: CategoryModalProps) {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [categorySearchResults, setCategorySearchResults] = useState<Product[]>([]);
 
-  if (!show) return null;
+  const isModalOpen = isOpen !== undefined ? isOpen : !!show;
+  if (!isModalOpen) return null;
 
   const handleCategorySelect = (category: string) => {
     setSelectedCategory(category);
@@ -40,7 +51,11 @@ export default function CategoryModal({
   };
 
   const handleAddAll = () => {
-    onAdd(categorySearchResults);
+    if (onBulkAddProducts) {
+      onBulkAddProducts(categorySearchResults, selectedCategory);
+    } else if (onAdd) {
+      onAdd(categorySearchResults);
+    }
     setSelectedCategory('');
     setCategorySearchResults([]);
     onClose();
@@ -51,7 +66,7 @@ export default function CategoryModal({
       <div className="bg-white rounded-xl shadow-lg w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200 border border-slate-200">
         <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-white">
           <h3 className="font-bold text-slate-900 uppercase tracking-wider text-sm flex items-center">
-            <Tag className="w-4 h-4 mr-2 text-indigo-600" /> Tambah Banyak (Kategori)
+            <Tag className="w-4 h-4 mr-2 text-indigo-600" /> {title}
           </h3>
           <button
             onClick={() => {
@@ -105,7 +120,14 @@ export default function CategoryModal({
                 {categorySearchResults.slice(0, 100).map((p, i) => (
                   <div
                     key={i}
-                    className="text-[11px] p-2 bg-slate-50 hover:bg-indigo-50 border border-slate-100 rounded-md flex justify-between items-center transition-colors"
+                    onClick={() => {
+                      if (onSelectProduct && p.sku) {
+                        onSelectProduct(p.sku);
+                      }
+                    }}
+                    className={`text-[11px] p-2 bg-slate-50 hover:bg-indigo-50 border border-slate-100 rounded-md flex justify-between items-center transition-colors ${
+                      onSelectProduct ? 'cursor-pointer hover:border-indigo-200' : ''
+                    }`}
                   >
                     <span className="truncate pr-3 font-medium text-slate-700">{p.name}</span>
                     <span className="text-[9px] px-1.5 py-0.5 bg-white border border-slate-200 text-slate-500 rounded font-mono flex-shrink-0">
@@ -134,7 +156,7 @@ export default function CategoryModal({
             disabled={categorySearchResults.length === 0}
             className="px-5 py-2 text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700 rounded-lg transition-all disabled:opacity-50 flex items-center shadow-sm active:scale-95"
           >
-            <Plus className="w-4 h-4 mr-1.5" /> Tambah Semua ({categorySearchResults.length})
+            <Plus className="w-4 h-4 mr-1.5" /> {bulkActionLabel || `Tambah Semua (${categorySearchResults.length})`}
           </button>
         </div>
       </div>
