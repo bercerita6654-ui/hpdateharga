@@ -166,6 +166,7 @@ export default function WholesaleTab({
   const [showBulkBrandModal, setShowBulkBrandModal] = useState<boolean>(false);
   const [isSavingBatch, setIsSavingBatch] = useState<boolean>(false);
   const [showDomainModal, setShowDomainModal] = useState<boolean>(false);
+  const [domainModalTab, setDomainModalTab] = useState<'origin_mismatch' | 'test_users' | 'domain'>('origin_mismatch');
   const [batchResultModal, setBatchResultModal] = useState<{
     show: boolean;
     success?: boolean;
@@ -2478,17 +2479,24 @@ export default function WholesaleTab({
                       <p className="font-mono text-[11px] bg-white/70 p-2 rounded border border-red-100 break-all">
                         {sheetsModalData.message}
                       </p>
-                      {(sheetsModalData.message?.toLowerCase().includes('unauthorized-domain') ||
-                        sheetsModalData.message?.toLowerCase().includes('authorized domains')) && (
-                        <button
-                          type="button"
-                          onClick={() => setShowDomainModal(true)}
-                          className="mt-1 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
-                        >
-                          <ShieldAlert className="w-3.5 h-3.5" />
-                          <span>Buka Panduan Otorisasi Domain Firebase</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const msg = (sheetsModalData.message || '').toLowerCase();
+                          if (msg.includes('domain') || msg.includes('unauthorized')) {
+                            setDomainModalTab('domain');
+                          } else if (msg.includes('test user')) {
+                            setDomainModalTab('test_users');
+                          } else {
+                            setDomainModalTab('origin_mismatch');
+                          }
+                          setShowDomainModal(true);
+                        }}
+                        className="mt-1 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                      >
+                        <ShieldAlert className="w-3.5 h-3.5" />
+                        <span>Buka Solusi Error 400: origin_mismatch / Izin Google</span>
+                      </button>
                     </div>
                   </div>
                   <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1.5">
@@ -2638,11 +2646,29 @@ export default function WholesaleTab({
                 <div className="space-y-3">
                   <div className="p-3.5 bg-red-50 border border-red-200 rounded-xl text-xs text-red-900 flex items-start gap-2.5">
                     <AlertTriangle className="w-4 h-4 text-red-600 mt-0.5 shrink-0" />
-                    <div>
+                    <div className="space-y-2 flex-1">
                       <p className="font-semibold">Terjadi kendala saat menyimpan batch:</p>
-                      <p className="mt-1 font-mono text-[11px] bg-white/70 p-2 rounded border border-red-100 break-all">
+                      <p className="font-mono text-[11px] bg-white/70 p-2 rounded border border-red-100 break-all">
                         {batchResultModal.message}
                       </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const msg = (batchResultModal.message || '').toLowerCase();
+                          if (msg.includes('domain') || msg.includes('unauthorized')) {
+                            setDomainModalTab('domain');
+                          } else if (msg.includes('test user')) {
+                            setDomainModalTab('test_users');
+                          } else {
+                            setDomainModalTab('origin_mismatch');
+                          }
+                          setShowDomainModal(true);
+                        }}
+                        className="mt-1 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold inline-flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                      >
+                        <ShieldAlert className="w-3.5 h-3.5" />
+                        <span>Buka Solusi Error 400: origin_mismatch / Izin Google</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -2677,6 +2703,7 @@ export default function WholesaleTab({
       <FirebaseAuthDomainModal
         isOpen={showDomainModal}
         onClose={() => setShowDomainModal(false)}
+        initialTab={domainModalTab}
       />
 
       {/* BULK ADD BY CATEGORY MODAL */}

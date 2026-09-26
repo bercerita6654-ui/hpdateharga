@@ -366,8 +366,22 @@ export async function loginWithGoogle(customLoginHint?: string): Promise<GoogleU
       const gisToken = await getGisAccessToken(true);
       const profile = await fetchGoogleUserProfile(gisToken);
       return profile;
-    } catch {
-      throw new Error(firebaseErr?.message || 'Login Google dengan Firebase gagal.');
+    } catch (gisErr: any) {
+      const gisMsg = String(gisErr?.message || '');
+      const isOrigin =
+        gisErr?.code === 'origin_mismatch' ||
+        gisMsg.toLowerCase().includes('origin_mismatch') ||
+        gisMsg.toLowerCase().includes('origin mismatch') ||
+        gisMsg.toLowerCase().includes('javascript origin');
+
+      if (isOrigin) {
+        const originErr: any = new Error(
+          'Error 400: origin_mismatch - Origin aplikasi belum didaftarkan di Authorized JavaScript origins Google Cloud Console. Silakan buka panduan untuk mendaftarkannya.'
+        );
+        originErr.code = 'origin_mismatch';
+        throw originErr;
+      }
+      throw new Error(gisMsg || firebaseErr?.message || 'Login Google dengan Firebase gagal.');
     }
   }
 }
@@ -441,6 +455,12 @@ async function getGisAccessToken(interactive = true): Promise<string> {
         hint: activeEmail || undefined, // Pemilihan Akun Cerdas (login_hint)
         callback: (tokenResponse: any) => {
           if (tokenResponse.error) {
+            const errStr = `${tokenResponse.error} ${tokenResponse.error_description || ''}`;
+            if (errStr.toLowerCase().includes('origin_mismatch') || errStr.toLowerCase().includes('origin mismatch')) {
+              const err: any = new Error('Error 400: origin_mismatch - Origin aplikasi belum didaftarkan di Authorized JavaScript origins Google Cloud Console.');
+              err.code = 'origin_mismatch';
+              return reject(err);
+            }
             return reject(new Error(tokenResponse.error_description || tokenResponse.error));
           }
           if (!tokenResponse.access_token) {
@@ -456,6 +476,12 @@ async function getGisAccessToken(interactive = true): Promise<string> {
           resolve(cachedToken!);
         },
         error_callback: (error: any) => {
+          const errStr = String(error?.message || '');
+          if (errStr.toLowerCase().includes('origin_mismatch') || errStr.toLowerCase().includes('origin mismatch')) {
+            const err: any = new Error('Error 400: origin_mismatch - Origin aplikasi belum didaftarkan di Authorized JavaScript origins Google Cloud Console.');
+            err.code = 'origin_mismatch';
+            return reject(err);
+          }
           reject(new Error(error.message || 'Otorisasi Google Sheets dibatalkan atau gagal.'));
         }
       });

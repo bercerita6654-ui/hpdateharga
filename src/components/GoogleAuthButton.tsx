@@ -27,6 +27,7 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
   const [authError, setAuthError] = useState<string | null>(null);
   const [isDomainError, setIsDomainError] = useState<boolean>(false);
   const [showDomainModal, setShowDomainModal] = useState<boolean>(false);
+  const [modalInitialTab, setModalInitialTab] = useState<'origin_mismatch' | 'test_users' | 'domain'>('origin_mismatch');
 
   useEffect(() => {
     // Inisialisasi Otomatis (initAuth) untuk mengevaluasi status Firebase Auth & sesi persisten
@@ -73,16 +74,43 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
       if (onAuthChange) onAuthChange(true);
     } catch (err: any) {
       console.error('Google Auth error:', err);
-      const isUnauthorized =
-        err?.code === 'auth/unauthorized-domain' ||
-        String(err?.message || '').toLowerCase().includes('unauthorized-domain') ||
-        String(err?.message || '').toLowerCase().includes('authorized domains');
+      const errMsg = String(err?.message || '');
+      const errCode = String(err?.code || '');
+      const lower = (errMsg + ' ' + errCode).toLowerCase();
 
-      if (isUnauthorized) {
+      const isOriginMismatch =
+        errCode === 'origin_mismatch' ||
+        lower.includes('origin_mismatch') ||
+        lower.includes('origin mismatch') ||
+        lower.includes('javascript origin') ||
+        lower.includes('error 400');
+
+      const isUnauthorized =
+        errCode === 'auth/unauthorized-domain' ||
+        lower.includes('unauthorized-domain') ||
+        lower.includes('authorized domains');
+
+      const isTestUserIssue =
+        lower.includes('test user') ||
+        lower.includes('belum menyelesaikan proses verifikasi') ||
+        lower.includes('unverified');
+
+      if (isOriginMismatch) {
+        setModalInitialTab('origin_mismatch');
         setIsDomainError(true);
         setShowDomainModal(true);
+      } else if (isUnauthorized) {
+        setModalInitialTab('domain');
+        setIsDomainError(true);
+        setShowDomainModal(true);
+      } else if (isTestUserIssue) {
+        setModalInitialTab('test_users');
+        setShowDomainModal(true);
+      } else {
+        setModalInitialTab('origin_mismatch');
       }
-      const msg = err?.message || 'Gagal login dengan Google.';
+
+      const msg = errMsg || 'Gagal login dengan Google.';
       setAuthError(msg);
     } finally {
       setIsLoading(false);
@@ -225,7 +253,13 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
                 className="mt-1 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-[10.5px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
               >
                 <ShieldAlert className="w-3.5 h-3.5" />
-                <span>Buka Solusi Izin Google / Test Users</span>
+                <span>
+                  {modalInitialTab === 'origin_mismatch'
+                    ? 'Solusi Error 400: origin_mismatch'
+                    : modalInitialTab === 'domain'
+                    ? 'Panduan Otorisasi Domain Firebase'
+                    : 'Buka Solusi Test Users Google'}
+                </span>
               </button>
             </div>
             <button
@@ -243,6 +277,7 @@ export default function GoogleAuthButton({ compact = false, onAuthChange }: Goog
         isOpen={showDomainModal}
         onClose={() => setShowDomainModal(false)}
         onRetry={handleLogin}
+        initialTab={modalInitialTab}
       />
     </div>
   );
