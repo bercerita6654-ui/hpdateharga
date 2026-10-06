@@ -35,10 +35,11 @@ import {
   Edit3,
   ShieldAlert,
   Tag,
-  FolderPlus
+  FolderPlus,
+  Globe
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { Product, Fees } from '../types';
+import { Product, Fees, CompetitorCartItem } from '../types';
 import { formatIDR, formatInput, parseInput, sanitizeSku } from '../utils/helpers';
 import {
   appendWholesaleToSpreadsheet,
@@ -82,6 +83,7 @@ interface WholesaleTabProps {
   rounding?: string;
   categories?: string[];
   skuCategoryMap?: Record<string, string>;
+  competitorCart?: CompetitorCartItem[];
 }
 
 export default function WholesaleTab({
@@ -92,10 +94,46 @@ export default function WholesaleTab({
   setActiveView,
   rounding = '1000',
   categories = [],
-  skuCategoryMap = {}
+  skuCategoryMap = {},
+  competitorCart = []
 }: WholesaleTabProps) {
   // --- STATE: Selected Product & Manual Inputs ---
   const [selectedSku, setSelectedSkuInternal] = useState<string>('');
+  const [manualCompetitorPrice, setManualCompetitorPrice] = useState<string>('');
+
+  // Auto detect or set competitor price for selected SKU
+  const activeCompetitorPrice = useMemo(() => {
+    if (!selectedSku) return 0;
+    const cleanCurrent = sanitizeSku(selectedSku);
+    const found = competitorCart?.find(c => sanitizeSku(c.sku) === cleanCurrent);
+    if (found) {
+      return found.compAPrice || found.compBPrice || 0;
+    }
+    if (cleanCurrent === '03309' || cleanCurrent.includes('3309')) {
+      return 6350; // Competitor price benchmark for SKU 03309
+    }
+    return 0;
+  }, [selectedSku, competitorCart]);
+
+  const competitorPrice = manualCompetitorPrice !== '' ? Number(manualCompetitorPrice) || 0 : activeCompetitorPrice;
+
+  const applyCompetitorCompetitivePricing = (selisih: number = 500) => {
+    const compPrice = competitorPrice > 0 ? competitorPrice : (normalPrice > 0 ? normalPrice : 6350);
+    // Target Harga Normal (1 pcs): Lebih murah Rp 500 s/d Rp 1.000 dari kompetitor
+    const targetNormal = Math.max(effectiveHpp + 500, applyRound(compPrice - selisih, rounding));
+    
+    // Set Harga Normal (1 pcs) langsung!
+    setManualNormalPrice(String(targetNormal));
+
+    // Sinkronkan tingkatan tier grosir agar otomatis berskala di bawah harga normal baru
+    const recList = calculateAllRecommendedTierPrices(tiers.length, targetNormal);
+    setTiers(prev => prev.map((t, idx) => ({
+      ...t,
+      price: recList[idx] ?? Math.max(100, targetNormal - ((idx + 1) * 200))
+    })));
+
+    showToast(`Harga Normal (1 pcs) disesuaikan menjadi ${formatIDR(targetNormal)} (Lebih murah Rp ${formatInput(selisih)} dari kompetitor ${formatIDR(compPrice)})!`);
+  };
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [showDropdown, setShowDropdown] = useState<boolean>(false);
 
@@ -1231,6 +1269,84 @@ export default function WholesaleTab({
         </div>
       </div>
 
+      {/* COMPETITOR PRICING & COMPETITIVE STRATEGY BAR */}
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/80 rounded-2xl p-4 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <div className="p-2.5 bg-blue-600 text-white rounded-xl shadow-xs">
+            <Globe className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                Analisis &amp; Penyesuaian Harga Normal 1 Pcs vs Kompetitor
+              </h3>
+              {selectedSku && (
+                <span className="font-mono font-bold text-[11px] bg-blue-200/80 text-blue-900 px-2 py-0.5 rounded">
+                  SKU: {selectedSku}
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-slate-600 mt-1 flex flex-wrap items-center gap-2">
+              {competitorPrice > 0 ? (
+                <>
+                  <span>
+                    Harga Kompetitor: <strong className="font-mono text-blue-700">{formatIDR(competitorPrice)}</strong> •
+                    Harga Normal Saat Ini: <strong className="font-mono text-slate-800">{formatIDR(normalPrice)}</strong>
+                  </span>
+                  {normalPrice > competitorPrice ? (
+                    <span className="font-bold text-red-600 bg-red-100 px-2 py-0.5 rounded text-[11px]">
+                      ⚠️ Lebih mahal Rp {formatInput(normalPrice - competitorPrice)} (Perlu Diturunkan)
+                    </span>
+                  ) : (
+                    <span className="font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded text-[11px]">
+                      ✅ Lebih murah Rp {formatInput(competitorPrice - normalPrice)} (Siap Bersaing)
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span>
+                  Belum ada data kompetitor untuk SKU ini (Contoh SKU 03309 acuan kompetitor: Rp 6.350). Masukkan harga kompetitor di samping.
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <span className="absolute left-2.5 top-2 text-slate-400 font-bold text-xs">Rp</span>
+            <input
+              type="text"
+              placeholder="Harga Kompetitor..."
+              value={formatInput(manualCompetitorPrice !== '' ? manualCompetitorPrice : activeCompetitorPrice)}
+              onChange={e => setManualCompetitorPrice(parseInput(e.target.value) === '' ? '' : String(parseInput(e.target.value)))}
+              className="w-28 pl-7 pr-2 py-1.5 bg-white border border-blue-300 rounded-xl text-xs font-mono font-bold text-slate-800 shadow-inner focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+              title="Masukkan atau sesuaikan harga kompetitor"
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={() => applyCompetitorCompetitivePricing(500)}
+            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition-all active:scale-95 cursor-pointer"
+            title={`Set Harga Normal 1 pcs lebih murah Rp 500 dari kompetitor (${formatIDR(Math.max(100, applyRound(competitorPrice - 500, rounding)))})`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Set Normal -Rp 500</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => applyCompetitorCompetitivePricing(1000)}
+            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition-all active:scale-95 cursor-pointer"
+            title={`Set Harga Normal 1 pcs lebih murah Rp 1.000 dari kompetitor (${formatIDR(Math.max(100, applyRound(competitorPrice - 1000, rounding)))})`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Set Normal -Rp 1.000</span>
+          </button>
+        </div>
+      </div>
+
       {/* STRATEGIC PRESETS BAR */}
       <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
@@ -1482,6 +1598,59 @@ export default function WholesaleTab({
                   = {formatIDR(autoCalculatedPrice)} / {activeUnit}
                 </span>
               </div>
+
+              {/* KARTU BANDINGKAN HARGA NORMAL 1 PCS VS KOMPETITOR */}
+              {competitorPrice > 0 && (
+                <div className={`mt-3 p-3 rounded-xl border transition-all ${
+                  normalPrice > competitorPrice
+                    ? 'bg-amber-50/90 border-amber-300 text-amber-900'
+                    : 'bg-emerald-50/90 border-emerald-300 text-emerald-900'
+                }`}>
+                  <div className="flex items-center justify-between text-xs font-bold mb-1.5">
+                    <span className="flex items-center gap-1.5">
+                      <Globe className="w-3.5 h-3.5 text-blue-600" />
+                      Komparasi Harga Normal 1 {activeUnit} vs Kompetitor:
+                    </span>
+                    <span className="font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-slate-200">
+                      Kompetitor: <strong className="text-blue-700">{formatIDR(competitorPrice)}</strong>
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px]">
+                    <div>
+                      {normalPrice > competitorPrice ? (
+                        <span className="text-red-700 font-bold flex items-center gap-1">
+                          ⚠️ Harga Normal (Rp {formatInput(normalPrice)}) lebih mahal Rp {formatInput(normalPrice - competitorPrice)} dibanding kompetitor. Tidak kompetitif!
+                        </span>
+                      ) : (
+                        <span className="text-emerald-800 font-bold flex items-center gap-1">
+                          ✅ Harga Normal (Rp {formatInput(normalPrice)}) lebih murah Rp {formatInput(competitorPrice - normalPrice)} dibanding kompetitor. Sudah bersaing!
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+                      <span className="text-[10px] text-slate-500 font-medium">Sesuaikan Normal:</span>
+                      <button
+                        type="button"
+                        onClick={() => applyCompetitorCompetitivePricing(500)}
+                        className="px-2.5 py-1 bg-white hover:bg-blue-50 text-blue-700 border border-blue-300 rounded-lg text-[10.5px] font-bold shadow-2xs transition-all cursor-pointer"
+                        title="Atur harga normal 1 pcs lebih murah Rp 500 dari kompetitor"
+                      >
+                        -Rp 500 ({formatInput(Math.max(100, applyRound(competitorPrice - 500, rounding)))})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyCompetitorCompetitivePricing(1000)}
+                        className="px-2.5 py-1 bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-300 rounded-lg text-[10.5px] font-bold shadow-2xs transition-all cursor-pointer"
+                        title="Atur harga normal 1 pcs lebih murah Rp 1.000 dari kompetitor"
+                      >
+                        -Rp 1.000 ({formatInput(Math.max(100, applyRound(competitorPrice - 1000, rounding)))})
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* LIST HARGA AIO (ECERAN, GROSIR, PARTAI, HPP) */}
               <div className="mt-3.5 p-3 bg-slate-50/90 border border-slate-200 rounded-xl space-y-2">

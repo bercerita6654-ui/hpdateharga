@@ -2716,6 +2716,7 @@ export default function App() {
             rounding={rounding}
             categories={categories}
             skuCategoryMap={skuCategoryMap}
+            competitorCart={competitorCart}
           />
         )}
 
