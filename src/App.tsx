@@ -43,6 +43,7 @@ import CartProfitMarginChart from './components/CartProfitMarginChart';
 import CartStockDistributionChart from './components/CartStockDistributionChart';
 import TokopediaTab from './components/TokopediaTab';
 import WholesaleTab from './components/WholesaleTab';
+import ShopeePromoAnalyzerTab from './components/ShopeePromoAnalyzerTab';
 import GoogleAuthButton from './components/GoogleAuthButton';
 
 const PRODUCT_DB_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTCxz1GPm7QU9IS1yBiSjvIdNTLUsvvplOCyT_R3XH4O-LuVbHoY_bXn1LTH5lpnlolJ29BhUgEdnFm/pub?gid=1428805476&single=true&output=csv';
@@ -198,7 +199,7 @@ export default function App() {
 
   const [serverDrafts, setServerDrafts] = useState<Record<string, any>>({});
   const [expandedSubmissionId, setExpandedSubmissionId] = useState<string | number | null>(null);
-  const [activeView, setActiveView] = useState<'calculator' | 'competitor' | 'inbox' | 'history' | 'shopee' | 'gomall_shopee' | 'tokopedia' | 'wholesale'>('calculator');
+  const [activeView, setActiveView] = useState<'calculator' | 'competitor' | 'inbox' | 'history' | 'shopee' | 'gomall_shopee' | 'tokopedia' | 'wholesale' | 'promo_analyzer'>('calculator');
   const [displayLimit, setDisplayLimit] = useState(100);
 
   const [fees, setFees] = useState<Fees>(() => {
@@ -1855,6 +1856,17 @@ export default function App() {
               <span className={`w-1.5 h-1.5 rounded-full ${activeView === 'wholesale' ? 'bg-orange-500' : 'bg-slate-400'}`}></span>
               Harga Grosir
             </button>
+            <button
+              onClick={() => setActiveView('promo_analyzer')}
+              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
+                activeView === 'promo_analyzer'
+                  ? 'bg-white border border-red-500 shadow-sm text-red-600 font-bold ring-1 ring-red-400/20'
+                  : 'text-slate-500 hover:text-red-600 hover:bg-slate-100/50'
+              }`}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${activeView === 'promo_analyzer' ? 'bg-red-500 animate-pulse' : 'bg-slate-400'}`}></span>
+              Analisa Promo Shopee
+            </button>
           </div>
 
           <div className="flex items-center gap-3 md:border-l md:border-slate-200 md:pl-4">
@@ -2717,6 +2729,16 @@ export default function App() {
             categories={categories}
             skuCategoryMap={skuCategoryMap}
             competitorCart={competitorCart}
+          />
+        )}
+
+        {activeView === 'promo_analyzer' && (
+          <ShopeePromoAnalyzerTab
+            productList={productList}
+            fees={fees}
+            setSelectedSku={setSelectedSku}
+            setProduct={setProduct}
+            setActiveView={setActiveView}
           />
         )}
 
