@@ -1803,70 +1803,30 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex bg-slate-50 p-1 rounded-lg border border-slate-200/60 w-full md:w-auto justify-start overflow-x-auto">
-            <button
-              onClick={() => setActiveView('calculator')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 whitespace-nowrap flex-shrink-0 ${
-                activeView === 'calculator'
-                  ? 'bg-white border border-slate-200/50 shadow-sm text-indigo-600 font-semibold'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100/50'
-              }`}
-            >
-              Kalkulator
-            </button>
-            <button
-              onClick={() => setActiveView('shopee')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 whitespace-nowrap flex-shrink-0 ${
-                activeView === 'shopee'
-                  ? 'bg-white border border-slate-200/50 shadow-sm text-indigo-600 font-semibold'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100/50'
-              }`}
-            >
-              Shopee Balist
-            </button>
-            <button
-              onClick={() => setActiveView('gomall_shopee')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 whitespace-nowrap flex-shrink-0 ${
-                activeView === 'gomall_shopee'
-                  ? 'bg-white border border-slate-200/50 shadow-sm text-indigo-600 font-semibold'
-                  : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100/50'
-              }`}
-            >
-              Gomall Shopee
-            </button>
-            <button
-              onClick={() => setActiveView('tokopedia')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
-                activeView === 'tokopedia'
-                  ? 'bg-white border border-emerald-300 shadow-sm text-emerald-700 font-bold'
-                  : 'text-slate-500 hover:text-emerald-700 hover:bg-slate-100/50'
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${activeView === 'tokopedia' ? 'bg-emerald-500' : 'bg-slate-400'}`}></span>
-              Tokopedia
-            </button>
-            <button
-              onClick={() => setActiveView('wholesale')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
-                activeView === 'wholesale'
-                  ? 'bg-white border border-orange-400 shadow-sm text-orange-700 font-bold'
-                  : 'text-slate-500 hover:text-orange-700 hover:bg-slate-100/50'
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${activeView === 'wholesale' ? 'bg-orange-500' : 'bg-slate-400'}`}></span>
-              Harga Grosir
-            </button>
-            <button
-              onClick={() => setActiveView('promo_analyzer')}
-              className={`px-4 py-2 text-[10px] font-bold uppercase tracking-widest rounded-md transition-all duration-200 flex items-center gap-1.5 whitespace-nowrap flex-shrink-0 ${
-                activeView === 'promo_analyzer'
-                  ? 'bg-white border border-red-500 shadow-sm text-red-600 font-bold ring-1 ring-red-400/20'
-                  : 'text-slate-500 hover:text-red-600 hover:bg-slate-100/50'
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${activeView === 'promo_analyzer' ? 'bg-red-500 animate-pulse' : 'bg-slate-400'}`}></span>
-              Analisa Promo Shopee
-            </button>
+          <div className="flex bg-slate-100/80 p-1 rounded-xl border border-slate-200/80 w-full md:w-auto justify-start items-center gap-1 overflow-x-auto">
+            {[
+              { id: 'calculator', label: 'Kalkulator' },
+              { id: 'shopee', label: 'Shopee Balist' },
+              { id: 'gomall_shopee', label: 'Gomall Shopee' },
+              { id: 'tokopedia', label: 'Tokopedia' },
+              { id: 'wholesale', label: 'Harga Grosir' },
+              { id: 'promo_analyzer', label: 'Analisa Promo Shopee' },
+            ].map(item => {
+              const isActive = activeView === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveView(item.id as any)}
+                  className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all duration-150 whitespace-nowrap flex-shrink-0 cursor-pointer ${
+                    isActive
+                      ? 'bg-white text-indigo-700 shadow-2xs border border-slate-200/80'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
           </div>
 
           <div className="flex items-center gap-3 md:border-l md:border-slate-200 md:pl-4">

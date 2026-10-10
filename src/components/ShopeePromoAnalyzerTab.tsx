@@ -89,6 +89,28 @@ export const extract5DigitCandidates = (text: any): string[] => {
 };
 
 /**
+ * Mendeteksi SKU Khusus dengan format Bundle/Pack Qty (misal: 16878-10PCS atau 16878-5P).
+ * Mengekstrak base SKU satuan dan kelipatan Qty.
+ */
+export const detectSpecialSkuQty = (code: any): { baseSku: string; qty: number; isSpecial: boolean; suffix: string } => {
+  if (code === undefined || code === null) return { baseSku: '', qty: 1, isSpecial: false, suffix: '' };
+  const str = String(code).trim().toUpperCase();
+  if (!str) return { baseSku: '', qty: 1, isSpecial: false, suffix: '' };
+
+  // Pola: 16878-10PCS, 16878-10P, 16878-10, 16878-5LBR, dsb.
+  const match = str.match(/^(.*?)-(\d+)(PCS|P|LBR|SET|BOX|PACK|L)?$/);
+  if (match) {
+    const baseSku = match[1];
+    const qty = parseInt(match[2], 10);
+    const suffix = match[3] || '';
+    if (qty > 1) {
+      return { baseSku, qty, isSpecial: true, suffix };
+    }
+  }
+  return { baseSku: str, qty: 1, isSpecial: false, suffix: '' };
+};
+
+/**
  * Representasi 1 baris item promo dengan 15 kolom standar file ekspor Shopee.
  * Sesuai permintaan pengguna:
  * - Baris data dimulai dari baris ke-4
@@ -125,6 +147,9 @@ export interface PromoItemRow {
   rawRowIndex?: number;           // Index baris asli pada file Excel (untuk menjaga susunan baris sama persis)
   assignedSku?: string;           // SKU 5 digit dari Stock List (contoh: '03309')
   skuMatchSource?: 'master_product_file' | 'manual' | 'exact' | '5digit_extract' | 'custom_col' | 'name_scan' | 'row_scan' | 'name_fuzzy' | 'none';
+  isSpecialSku?: boolean;         // Apakah SKU khusus bundle/pack (misal: 16878-10PCS)
+  specialSkuQty?: number;         // Kelipatan qty bundle/pack (misal 10)
+  baseSkuCode?: string;           // Base SKU satuan (misal 16878)
 }
 
 /**
@@ -237,6 +262,7 @@ export default function ShopeePromoAnalyzerTab({
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'danger' | 'safe' | 'missingHpp' | 'unmatchedSku'>('all');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [showHeroHeader, setShowHeroHeader] = useState<boolean>(false);
 
   // Seleksi Produk Tertentu untuk Download / Aksi Massal
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
@@ -376,11 +402,21 @@ export default function ShopeePromoAnalyzerTab({
     const vClean = sanitizeSku(variationCode || '').toLowerCase().trim();
     const pClean = sanitizeSku(productCode || '').toLowerCase().trim();
 
+    // Check with special SKU suffix stripped as well (e.g. 16878-10PCS -> 16878)
+    const specV = detectSpecialSkuQty(variationCode);
+    const specP = detectSpecialSkuQty(productCode);
+    const vCleanBase = specV.isSpecial ? sanitizeSku(specV.baseSku).toLowerCase().trim() : '';
+    const pCleanBase = specP.isSpecial ? sanitizeSku(specP.baseSku).toLowerCase().trim() : '';
+
     let masterItem: ShopeeProductMasterItem | undefined = undefined;
     if (vClean && currentMasterMap.has(vClean)) {
       masterItem = currentMasterMap.get(vClean);
+    } else if (vCleanBase && currentMasterMap.has(vCleanBase)) {
+      masterItem = currentMasterMap.get(vCleanBase);
     } else if (pClean && currentMasterMap.has(pClean)) {
       masterItem = currentMasterMap.get(pClean);
+    } else if (pCleanBase && currentMasterMap.has(pCleanBase)) {
+      masterItem = currentMasterMap.get(pCleanBase);
     }
 
     if (masterItem) {
@@ -581,18 +617,37 @@ export default function ShopeePromoAnalyzerTab({
    * tidak rugi saat dipotong biaya % dan biaya tetap Toko Star+.
    */
   const calculateItemAnalysis = (item: PromoItemRow) => {
-    const targetSku = item.assignedSku || item.variationCode || item.productCode || item.variationSku || item.parentSku;
-    const matched = item.matchedProduct || findProductDirect(targetSku) || findProductBySkuOrName(targetSku, item.productName);
+    // Detect special SKU and quantity multiplier (e.g. 16878-10PCS -> 10x multiplier)
+    // We check the original raw fields first as they preserve the -10PCS suffix even if assignedSku was resolved to 5-digit base.
+    const rawCodesForSpec = [item.variationCode, item.productCode, item.variationSku, item.parentSku, item.assignedSku].filter(Boolean);
+    let spec = { baseSku: '', qty: 1, isSpecial: false, suffix: '' };
+    for (const code of rawCodesForSpec) {
+      const res = detectSpecialSkuQty(code);
+      if (res.isSpecial) {
+        spec = res;
+        break;
+      }
+    }
+    // Fallback if no special SKU format found
+    if (!spec.isSpecial) {
+      spec = detectSpecialSkuQty(item.assignedSku || item.variationCode || item.productCode || item.variationSku || item.parentSku);
+    }
+
+    const targetSku = spec.isSpecial ? spec.baseSku : (item.assignedSku || item.variationCode || item.productCode || item.variationSku || item.parentSku);
+    const searchSku = spec.isSpecial ? spec.baseSku : targetSku;
+
+    const matched = item.matchedProduct || findProductDirect(searchSku) || findProductBySkuOrName(searchSku, item.productName);
+    const qtyMultiplier = spec.qty || 1;
 
     // HPP / Modal Acuan
     let hpp = 0;
     if (item.manualHpp !== undefined && item.manualHpp > 0) {
       hpp = item.manualHpp;
     } else if (matched) {
-      if (hppReference === 'eceran') hpp = matched.eceran || matched.hpp;
-      else if (hppReference === 'grosir') hpp = matched.grosir || matched.hpp;
-      else if (hppReference === 'partai') hpp = matched.partai || matched.hpp;
-      else hpp = matched.hpp;
+      if (hppReference === 'eceran') hpp = (matched.eceran || matched.hpp) * qtyMultiplier;
+      else if (hppReference === 'grosir') hpp = (matched.grosir || matched.hpp) * qtyMultiplier;
+      else if (hppReference === 'partai') hpp = (matched.partai || matched.hpp) * qtyMultiplier;
+      else hpp = matched.hpp * qtyMultiplier;
     }
     const hasHpp = hpp > 0;
 
@@ -713,7 +768,10 @@ export default function ShopeePromoAnalyzerTab({
       statusMessage,
       matchedProduct: matched,
       isShopeeLoss,
-      shopeeNetProfit
+      shopeeNetProfit,
+      qtyMultiplier,
+      isSpecialSku: spec.isSpecial,
+      baseSkuCode: spec.baseSku
     };
   };
 
@@ -2522,8 +2580,29 @@ export default function ShopeePromoAnalyzerTab({
     let unmatchedSkuCount = 0;
     let totalPotentialLoss = 0;
     let totalDeficit = 0;
+    let specialSkuCount = 0;
+    let specialDangerCount = 0;
+    let specialSafeCount = 0;
+    let specialMissingHppCount = 0;
+    let specialPotentialLoss = 0;
 
     analyzedItems.forEach(item => {
+      // Hitung SKU Khusus (Bundle / Pack)
+      if (item.analysis.isSpecialSku) {
+        specialSkuCount++;
+        if (item.analysis.status === 'danger') {
+          specialDangerCount++;
+          if (item.analysis.netProfit < 0) {
+            specialPotentialLoss += Math.abs(item.analysis.netProfit);
+          }
+        } else if (item.analysis.status === 'safe') {
+          specialSafeCount++;
+        } else {
+          specialMissingHppCount++;
+        }
+        return; // Lewati agar tidak tercampur di statistik standar
+      }
+
       if (item.matchedProduct) {
         matchedSkuCount++;
       } else {
@@ -2544,14 +2623,19 @@ export default function ShopeePromoAnalyzerTab({
     });
 
     return {
-      total,
+      total: total - specialSkuCount, // Jumlah standar saja (tanpa SKU Khusus)
       dangerCount,
       safeCount,
       missingHppCount,
       matchedSkuCount,
       unmatchedSkuCount,
       totalPotentialLoss,
-      totalDeficit
+      totalDeficit,
+      specialSkuCount,
+      specialDangerCount,
+      specialSafeCount,
+      specialMissingHppCount,
+      specialPotentialLoss
     };
   }, [analyzedItems]);
 
@@ -2565,10 +2649,19 @@ export default function ShopeePromoAnalyzerTab({
   // Filter & Search Items
   const filteredItems = useMemo(() => {
     return analyzedItems.filter(item => {
-      if (statusFilter === 'danger' && item.analysis.status !== 'danger') return false;
-      if (statusFilter === 'safe' && item.analysis.status !== 'safe') return false;
-      if (statusFilter === 'missingHpp' && item.analysis.status !== 'missingHpp') return false;
-      if (statusFilter === 'unmatchedSku' && item.matchedProduct) return false;
+      const isSpecial = item.analysis.isSpecialSku;
+
+      if (statusFilter === 'specialSku') {
+        if (!isSpecial) return false;
+      } else {
+        // Untuk tab standar lain, sembunyikan SKU Khusus sepenuhnya
+        if (isSpecial) return false;
+
+        if (statusFilter === 'danger' && item.analysis.status !== 'danger') return false;
+        if (statusFilter === 'safe' && item.analysis.status !== 'safe') return false;
+        if (statusFilter === 'missingHpp' && item.analysis.status !== 'missingHpp') return false;
+        if (statusFilter === 'unmatchedSku' && item.matchedProduct) return false;
+      }
 
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
@@ -3016,62 +3109,93 @@ export default function ShopeePromoAnalyzerTab({
       )}
 
       {/* HEADER SECTION */}
-      <div className="bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 rounded-2xl p-6 sm:p-8 text-white shadow-lg relative overflow-hidden">
-        <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-white/5 transform skew-x-12 pointer-events-none" />
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2 max-w-3xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold tracking-wide uppercase">
-              <ShieldAlert className="w-4 h-4 text-amber-200" />
-              Proteksi Margin & Analisa Kolom Rekomendasi Diskon Shopee
+      {showHeroHeader ? (
+        <div className="bg-gradient-to-r from-red-600 via-orange-600 to-amber-600 rounded-2xl p-6 sm:p-8 text-white shadow-lg relative overflow-hidden">
+          <div className="absolute right-0 top-0 bottom-0 w-1/3 bg-white/5 transform skew-x-12 pointer-events-none" />
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2 max-w-3xl">
+              <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold tracking-wide uppercase">
+                <ShieldAlert className="w-4 h-4 text-amber-200" />
+                Proteksi Margin & Analisa Kolom Rekomendasi Diskon Shopee
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-black tracking-tight flex items-center gap-3">
+                Analisa Kolom Rekomendasi Harga Diskon Shopee
+              </h1>
+              <p className="text-orange-100 text-sm sm:text-base leading-relaxed">
+                Mengecek apakah harga pada kolom <strong className="text-white underline decoration-white decoration-2">Rekomendasi Harga Diskon</strong> dari Shopee aman atau menyebabkan kerugian saat dipotong biaya persentase Toko Star+ (Admin, Bebas Ongkir XTRA, Promo XTRA+ 6.5%, Biaya Promosi Toko 5-10%, Asuransi, AMS) dan biaya tetap (Marketplace, Jubelio, Packing, Hemat Kirim).
+                Jika di bawah batas margin atau rugi, <strong className="text-white bg-red-800/80 px-2 py-0.5 rounded">langsung diberi peringatan berwarna merah</strong>.
+              </p>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-black tracking-tight flex items-center gap-3">
-              Analisa Kolom Rekomendasi Harga Diskon Shopee
-            </h1>
-            <p className="text-orange-100 text-sm sm:text-base leading-relaxed">
-              Mengecek apakah harga pada kolom <strong className="text-white underline decoration-white decoration-2">Rekomendasi Harga Diskon</strong> dari Shopee aman atau menyebabkan kerugian saat dipotong biaya persentase Toko Star+ (Admin, Bebas Ongkir XTRA, Promo XTRA+ 6.5%, Biaya Promosi Toko 5-10%, Asuransi, AMS) dan biaya tetap (Marketplace, Jubelio, Packing, Hemat Kirim).
-              Jika di bawah batas margin atau rugi, <strong className="text-white bg-red-800/80 px-2 py-0.5 rounded">langsung diberi peringatan berwarna merah</strong>.
-            </p>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={handleLoadDemoAllData}
-              className="px-3.5 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-extrabold rounded-xl text-xs sm:text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer active:scale-95 animate-pulse"
-              title="Muat contoh File 1 (Promo) & File 2 (Data Produk) sekaligus untuk langsung menjalankan analisa"
-            >
-              <Sparkles className="w-4 h-4 text-white" /> Muat Contoh Lengkap (File 1 & 2)
-            </button>
-            <button
-              onClick={handleLoadDemoData}
-              className="px-3 py-2 bg-white text-orange-700 hover:bg-orange-50 border border-orange-200 font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-              title="Muat contoh file promosi Shopee (15 Kolom)"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-orange-600" /> Contoh File 1
-            </button>
-            <button
-              onClick={handleLoadDemoMasterData}
-              className="px-3 py-2 bg-indigo-50 text-indigo-900 hover:bg-indigo-100 border border-indigo-200 font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-              title="Muat contoh Data Produk Shopee (14 Kolom)"
-            >
-              <Database className="w-3.5 h-3.5 text-indigo-600" /> Contoh File 2
-            </button>
-            <button
-              onClick={handleDownloadTemplate}
-              className="px-3 py-2 bg-orange-700/80 hover:bg-orange-700 text-white border border-white/20 font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-              title="Download template Excel 15 kolom siap upload ke Shopee Seller Centre (baris data mulai baris ke-4)"
-            >
-              <Download className="w-3.5 h-3.5" /> Template File 1 (Baris 4)
-            </button>
-            <button
-              onClick={handleDownloadMasterTemplate}
-              className="px-3 py-2 bg-indigo-950/40 hover:bg-indigo-950/60 text-white border border-white/20 font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
-              title="Download template Excel 14 kolom Data Produk Shopee (mulai baris ke-7)"
-            >
-              <Download className="w-3.5 h-3.5" /> Template File 2 (Baris 7)
-            </button>
+            <div className="flex flex-col items-start md:items-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowHeroHeader(false)}
+                className="px-3 py-1.5 bg-black/20 hover:bg-black/30 text-white font-bold rounded-xl text-xs backdrop-blur-sm transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                title="Sembunyikan banner header ini agar hemat ruang layar"
+              >
+                <ChevronUp className="w-4 h-4" /> Sembunyikan Header
+              </button>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  onClick={handleLoadDemoAllData}
+                  className="px-3.5 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-extrabold rounded-xl text-xs sm:text-sm shadow-md transition-all flex items-center gap-2 cursor-pointer active:scale-95 animate-pulse"
+                  title="Muat contoh File 1 (Promo) & File 2 (Data Produk) sekaligus untuk langsung menjalankan analisa"
+                >
+                  <Sparkles className="w-4 h-4 text-white" /> Muat Contoh Lengkap (File 1 & 2)
+                </button>
+                <button
+                  onClick={handleLoadDemoData}
+                  className="px-3 py-2 bg-white text-orange-700 hover:bg-orange-50 border border-orange-200 font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  title="Muat contoh file promosi Shopee (15 Kolom)"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-orange-600" /> Contoh File 1
+                </button>
+                <button
+                  onClick={handleLoadDemoMasterData}
+                  className="px-3 py-2 bg-indigo-50 text-indigo-900 hover:bg-indigo-100 border border-indigo-200 font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  title="Muat contoh Data Produk Shopee (14 Kolom)"
+                >
+                  <Database className="w-3.5 h-3.5 text-indigo-600" /> Contoh File 2
+                </button>
+                <button
+                  onClick={handleDownloadTemplate}
+                  className="px-3 py-2 bg-orange-700/80 hover:bg-orange-700 text-white border border-white/20 font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  title="Download template Excel 15 kolom siap upload ke Shopee Seller Centre (baris data mulai baris ke-4)"
+                >
+                  <Download className="w-3.5 h-3.5" /> Template File 1
+                </button>
+                <button
+                  onClick={handleDownloadMasterTemplate}
+                  className="px-3 py-2 bg-indigo-950/40 hover:bg-indigo-950/60 text-white border border-white/20 font-bold rounded-xl text-xs sm:text-sm shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                  title="Download template Excel 14 kolom Data Produk Shopee (mulai baris ke-7)"
+                >
+                  <Download className="w-3.5 h-3.5" /> Template File 2
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex items-center justify-between bg-white border border-slate-200 rounded-xl px-4 py-2 text-xs font-semibold text-slate-700 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <span className="p-1 bg-orange-100 text-orange-700 rounded-lg">
+              <ShieldAlert className="w-3.5 h-3.5" />
+            </span>
+            <span className="font-bold text-slate-800">Analisa Kolom Rekomendasi Harga Diskon Shopee</span>
+            <span className="text-[10px] text-slate-400 font-normal hidden sm:inline">(Header Banner Disembunyikan)</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowHeroHeader(true)}
+            className="px-3 py-1 bg-orange-50 hover:bg-orange-100 text-orange-700 font-bold text-xs rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+            title="Tampilkan kembali banner petunjuk header"
+          >
+            <ChevronDown className="w-3.5 h-3.5" /> Tampilkan Petunjuk Header
+          </button>
+        </div>
+      )}
 
       {/* WORKFLOW ALUR 2 FILE EXCEL SHOPEE */}
       <div className="space-y-4">
@@ -3134,7 +3258,7 @@ export default function ShopeePromoAnalyzerTab({
                 <div>
                   <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
                     <FileSpreadsheet className="w-5 h-5 text-orange-600 shrink-0" />
-                    <span>File 1: Promosi Shopee (.xlsx)</span>
+                    <span>File 1: Data Campaign Shopee (.xlsx)</span>
                   </h2>
                   <p className="text-xs text-slate-500 mt-0.5">
                     15 kolom resmi ekspor Diskon Toko / Flash Sale / Campaign. Data mulai <strong>baris ke-4</strong>.
@@ -3288,12 +3412,12 @@ export default function ShopeePromoAnalyzerTab({
                     </div>
                   ) : (
                     <div className="flex flex-col items-center gap-2">
-                      <div className="p-2.5 bg-orange-100 text-orange-600 rounded-xl shadow-inner">
-                        <Upload className="w-5 h-5" />
+                      <div className="p-2.5 bg-orange-100 text-orange-600 rounded-xl shadow-inner flex items-center justify-center w-[80px] h-[80px]">
+                        <Upload className="w-[60px] h-[60px]" />
                       </div>
                       <div>
                         <span className="text-xs font-bold text-slate-800">
-                          {fileName ? 'Ganti File Promosi Shopee (.xlsx)' : 'Klik untuk Upload File 1 (Promosi Shopee)'}
+                          {fileName ? 'Ganti File Data Campaign Shopee (.xlsx)' : 'Klik untuk Upload File 1 (Data Campaign Shopee)'}
                         </span>
                         <p className="text-[11px] text-slate-400 mt-0.5">
                           File Diskon Toko / Flash Sale / Campaign Shopee
@@ -3328,7 +3452,7 @@ export default function ShopeePromoAnalyzerTab({
                 <div>
                   <h2 className="text-base font-bold text-indigo-950 flex items-center gap-2">
                     <Database className="w-5 h-5 text-indigo-600 shrink-0" />
-                    <span>File 2: Data Produk Shopee (.xlsx)</span>
+                    <span>File 2: Mass Update (Informasi Penjualan) (.xlsx)</span>
                   </h2>
                   <p className="text-xs text-indigo-700 mt-0.5">
                     Jembatan SKU 5-Digit: 14 kolom resmi, baris data mulai <strong>baris ke-7</strong>.
@@ -3432,14 +3556,14 @@ export default function ShopeePromoAnalyzerTab({
                     </div>
                   ) : (
                     <div className="flex flex-col items-center gap-2">
-                      <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-xl shadow-inner">
-                        <Database className="w-5 h-5" />
+                      <div className="p-2.5 bg-indigo-100 text-indigo-700 rounded-xl shadow-inner flex items-center justify-center w-[80px] h-[80px]">
+                        <Database className="w-[60px] h-[60px]" />
                       </div>
                       <div>
                         <span className="text-xs font-bold text-indigo-950">
                           {masterFileName
                             ? `Ganti File 2 (${masterProducts.length} variasi terdaftar)`
-                            : 'Klik untuk Upload File 2 (Data Produk Shopee .xlsx)'}
+                            : 'Klik untuk Upload File 2 (Mass Update / Informasi Penjualan .xlsx)'}
                         </span>
                         <p className="text-[11px] text-indigo-600/80 mt-0.5">
                           Ekspor dari Seller Centre &gt; Ubah Masal / Informasi Penjualan (Mulai Baris 7)
@@ -3475,7 +3599,7 @@ export default function ShopeePromoAnalyzerTab({
 
       {/* WAITING / STEP PENDING INSTRUCTIONAL STATE BANNERS */}
       {!canAnalyze && (
-        <div className="space-y-4">
+        <div className="space-y-4 hidden">
           {fileName && !masterFileName && (
             <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-6 text-center space-y-4 shadow-sm animate-in fade-in">
               <div className="inline-flex p-3 bg-amber-100 text-amber-700 rounded-2xl ring-4 ring-amber-200/50">
@@ -3486,10 +3610,10 @@ export default function ShopeePromoAnalyzerTab({
                   Langkah 1 Selesai • Menunggu Langkah 2
                 </div>
                 <h3 className="text-lg font-black text-amber-950">
-                  Analisa Ditunda: Menunggu Upload File 2 (Data Produk Shopee)
+                  Analisa Ditunda: Menunggu Upload File 2 (Mass Update Informasi Penjualan)
                 </h3>
                 <p className="text-xs sm:text-sm text-amber-800 leading-relaxed">
-                  Aplikasi <strong>tidak dapat menganalisa jika hanya mengupload File 1</strong> ({items.length} item promo berhasil dimuat). Anda wajib mengupload <strong>File 2 (Data Produk Shopee .xlsx 14 Kolom)</strong> agar Kode Variasi Shopee dapat dihubungkan ke SKU 5-Digit Stock List dan modal HPP toko Anda.
+                  Aplikasi <strong>tidak dapat menganalisa jika hanya mengupload File 1</strong> ({items.length} item promo berhasil dimuat). Anda wajib mengupload <strong>File 2 (Mass Update Informasi Penjualan .xlsx 14 Kolom)</strong> agar Kode Variasi Shopee dapat dihubungkan ke SKU 5-Digit Stock List dan modal HPP toko Anda.
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
@@ -3519,10 +3643,10 @@ export default function ShopeePromoAnalyzerTab({
                   Langkah 2 Selesai • Menunggu Langkah 1
                 </div>
                 <h3 className="text-lg font-black text-orange-950">
-                  Menunggu Upload File 1 (Promosi Shopee)
+                  Menunggu Upload File 1 (Data Campaign Shopee)
                 </h3>
                 <p className="text-xs sm:text-sm text-orange-800 leading-relaxed">
-                  File 2 ({masterProducts.length} variasi terdaftar) telah siap di memori. Silakan upload <strong>File 1 (Promosi Shopee .xlsx 15 Kolom)</strong> pada kotak di sebelah kiri untuk mendeteksi potensi kerugian pada harga rekomendasi diskon Shopee.
+                  File 2 ({masterProducts.length} variasi terdaftar) telah siap di memori. Silakan upload <strong>File 1 (Data Campaign Shopee .xlsx 15 Kolom)</strong> pada kotak di sebelah kiri untuk mendeteksi potensi kerugian pada harga rekomendasi diskon Shopee.
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
@@ -4069,60 +4193,74 @@ export default function ShopeePromoAnalyzerTab({
             {/* TOOLBAR TABEL */}
             <div className="p-4 bg-slate-50/80 border-b border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               {/* Filter Tabs */}
-              <div className="flex items-center gap-2 overflow-x-auto pb-1 lg:pb-0">
+              <div className="flex items-center gap-1 bg-slate-200/60 p-1 rounded-xl border border-slate-200/80 overflow-x-auto pb-0">
                 <button
                   onClick={() => setStatusFilter('all')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                     statusFilter === 'all'
-                      ? 'bg-slate-900 text-white shadow-2xs'
-                      : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-200'
+                      ? 'bg-white text-slate-900 shadow-2xs border border-slate-200/80'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
                   }`}
                 >
-                  Semua SKU ({stats.total})
+                  Semua ({stats.total})
                 </button>
                 <button
                   onClick={() => setStatusFilter('danger')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
                     statusFilter === 'danger'
-                      ? 'bg-red-600 text-white shadow-2xs'
-                      : 'bg-red-50 text-red-700 hover:bg-red-100 border border-red-200'
+                      ? 'bg-white text-red-700 shadow-2xs border border-red-200'
+                      : 'text-slate-600 hover:text-red-700 hover:bg-slate-200/50'
                   }`}
                 >
-                  🔴 Peringatan Merah ({stats.dangerCount})
+                  <span className="w-2 h-2 rounded-full bg-red-500 shrink-0"></span>
+                  Peringatan Merah ({stats.dangerCount})
                 </button>
                 <button
                   onClick={() => setStatusFilter('safe')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
                     statusFilter === 'safe'
-                      ? 'bg-emerald-600 text-white shadow-2xs'
-                      : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                      ? 'bg-white text-emerald-700 shadow-2xs border border-emerald-200'
+                      : 'text-slate-600 hover:text-emerald-700 hover:bg-slate-200/50'
                   }`}
                 >
-                  🟢 Aman ({stats.safeCount})
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                  Aman ({stats.safeCount})
+                </button>
+                <button
+                  onClick={() => setStatusFilter('specialSku')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
+                    statusFilter === 'specialSku'
+                      ? 'bg-white text-amber-700 shadow-2xs border border-amber-200'
+                      : 'text-slate-600 hover:text-amber-700 hover:bg-slate-200/50'
+                  }`}
+                  title="Tampilkan hanya SKU khusus bundle/pack dengan kuantitas kelipatan (seperti: 16878-10PCS)"
+                >
+                  <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+                  SKU Khusus ({stats.specialSkuCount})
                 </button>
                 {stats.unmatchedSkuCount > 0 && (
                   <button
                     onClick={() => setStatusFilter('unmatchedSku')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
                       statusFilter === 'unmatchedSku'
-                        ? 'bg-indigo-600 text-white shadow-2xs'
-                        : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
+                        ? 'bg-white text-indigo-700 shadow-2xs border border-indigo-200'
+                        : 'text-slate-600 hover:text-indigo-700 hover:bg-slate-200/50'
                     }`}
                     title="Tampilkan hanya produk yang belum terhubung dengan SKU 5 Digit Stock List"
                   >
-                    <Link2 className="w-3.5 h-3.5" /> Belum Cocok SKU 5-Digit ({stats.unmatchedSkuCount})
+                    <Link2 className="w-3.5 h-3.5" /> Belum Cocok ({stats.unmatchedSkuCount})
                   </button>
                 )}
                 {stats.missingHppCount > 0 && (
                   <button
                     onClick={() => setStatusFilter('missingHpp')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
                       statusFilter === 'missingHpp'
-                        ? 'bg-amber-600 text-white shadow-2xs'
-                        : 'bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200'
+                        ? 'bg-white text-slate-800 shadow-2xs border border-slate-300'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
                     }`}
                   >
-                    ⚪ Belum Ada HPP ({stats.missingHppCount})
+                    Tanpa HPP ({stats.missingHppCount})
                   </button>
                 )}
               </div>
@@ -4352,13 +4490,65 @@ export default function ShopeePromoAnalyzerTab({
               </div>
             )}
 
+            {/* DEDICATED SKU KHUSUS VIEW BANNER */}
+            {statusFilter === 'specialSku' && (
+              <div className="p-5 bg-gradient-to-r from-amber-500/10 via-orange-500/5 to-amber-500/10 border border-amber-200 rounded-2xl m-4 shadow-sm space-y-4">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-amber-500 text-white rounded-xl shadow-xs shrink-0">
+                      <Layers className="w-5 h-5" />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-bold text-sm sm:text-base text-amber-950 flex items-center gap-2">
+                        <span>📊 DEDICATED VIEW: Analisis SKU Khusus (Bundle/Pack Qty)</span>
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200 text-amber-900 border border-amber-300 uppercase tracking-wider">
+                          Aktif
+                        </span>
+                      </h3>
+                      <p className="text-xs text-amber-900/80 leading-relaxed max-w-3xl">
+                        View khusus ini mendeteksi SKU format kuantitas (seperti <code>-10PCS</code>). Sistem secara otomatis menarik modal HPP &amp; harga dasar dari <strong>SKU Satuan 5 Digit asli</strong> di Stock List, kemudian <strong>mengalikan HPP, Eceran, Grosir, dan Partai sesuai kuantitas isi pack</strong> sebelum melakukan kalkulasi margin dan menampilkan data di bawah.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Sub KPI Cards for Special SKU */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5 pt-1.5">
+                  <div className="bg-white p-3 rounded-xl border border-amber-200/60 shadow-2xs">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Total SKU Khusus</span>
+                    <span className="text-lg font-black text-amber-950 font-mono block mt-1">
+                      {stats.specialSkuCount} <span className="text-xs text-slate-400 font-normal">SKU</span>
+                    </span>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-amber-200/60 shadow-2xs">
+                    <span className="text-[10px] font-bold text-red-600 uppercase tracking-wider block">🔴 Bahaya Boncos</span>
+                    <span className="text-lg font-black text-red-600 font-mono block mt-1">
+                      {stats.specialDangerCount} <span className="text-xs text-slate-400 font-normal">SKU</span>
+                    </span>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-amber-200/60 shadow-2xs">
+                    <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider block">🟢 Aman (Target Margin)</span>
+                    <span className="text-lg font-black text-emerald-600 font-mono block mt-1">
+                      {stats.specialSafeCount} <span className="text-xs text-slate-400 font-normal">SKU</span>
+                    </span>
+                  </div>
+                  <div className="bg-white p-3 rounded-xl border border-amber-200/60 shadow-2xs">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Potensi Kerugian Khusus</span>
+                    <span className={`text-sm font-black font-mono block mt-1.5 ${stats.specialPotentialLoss > 0 ? 'text-red-600' : 'text-slate-700'}`}>
+                      {formatIDR(stats.specialPotentialLoss)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* TABEL KONTEN */}
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto max-h-[600px] overflow-y-auto border border-slate-200 rounded-xl shadow-sm">
               <table className="w-full text-left text-xs border-collapse">
                 <thead>
-                  <tr className="bg-slate-50/90 text-slate-600 font-bold uppercase tracking-wider text-[10px] border-b border-slate-200 whitespace-nowrap">
+                  <tr className="text-slate-600 font-bold uppercase tracking-wider text-[10px] whitespace-nowrap">
                     {/* CHECKBOX PILIH SEMUA */}
-                    <th className="py-3 px-3 text-center sticky left-0 bg-slate-50 z-20 w-10 border-r border-slate-200/60">
+                    <th className="py-3 px-3 text-center sticky top-0 left-0 bg-slate-100 z-30 w-10 border-r border-slate-200/60 border-b border-slate-200 shadow-xs">
                       <input
                         type="checkbox"
                         aria-label="Pilih semua produk yang difilter"
@@ -4372,53 +4562,53 @@ export default function ShopeePromoAnalyzerTab({
                         className="w-4 h-4 rounded text-orange-600 focus:ring-orange-500 cursor-pointer accent-orange-600 align-middle"
                       />
                     </th>
-                    <th className="py-3 px-4 sticky left-10 bg-slate-50 z-20">Status Kelayakan</th>
-                    <th className="py-3 px-3">SKU Stock List (5 Digit) &amp; Shopee</th>
-                    <th className="py-3 px-4">Nama Produk & Variasi</th>
+                    <th className="py-3 px-4 sticky top-0 left-10 bg-slate-100 z-30 w-[140px] border-r border-slate-200/60 border-b border-slate-200 shadow-xs">Status Kelayakan</th>
+                    <th className="py-3 px-3 sticky top-0 left-[180px] bg-slate-100 z-30 w-[180px] border-r border-slate-200/60 border-b border-slate-200 shadow-xs">SKU Stock List (5 Digit) &amp; Shopee</th>
+                    <th className="py-3 px-4 sticky top-0 left-[360px] bg-slate-100 z-30 min-w-[220px] max-w-[320px] border-r border-slate-200/60 border-b border-slate-200 shadow-xs">Nama Produk & Variasi</th>
 
                     {viewMode === 'full_shopee' && (
                       <>
-                        <th className="py-3 px-3">Kode Produk</th>
-                        <th className="py-3 px-3">Kategori L1 - L3</th>
-                        <th className="py-3 px-2 text-right">Penjualan</th>
-                        <th className="py-3 px-2 text-right">Stok / Promo</th>
-                        <th className="py-3 px-2 text-center">Batas Beli</th>
+                        <th className="py-3 px-3 sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Kode Produk</th>
+                        <th className="py-3 px-3 sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Kategori L1 - L3</th>
+                        <th className="py-3 px-2 text-right sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Penjualan</th>
+                        <th className="py-3 px-2 text-right sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Stok / Promo</th>
+                        <th className="py-3 px-2 text-center sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Batas Beli</th>
                       </>
                     )}
 
-                    <th className="py-3 px-3 text-right">HPP Modal</th>
-                    <th className="py-3 px-3 text-right text-indigo-950 font-bold bg-indigo-50/60 border-l border-indigo-100 whitespace-nowrap">
+                    <th className="py-3 px-3 text-right sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">HPP Modal</th>
+                    <th className="py-3 px-3 text-right text-indigo-950 font-bold bg-indigo-50/60 border-l border-indigo-100 whitespace-nowrap sticky top-0 z-20 border-b border-slate-200 shadow-xs">
                       Harga Eceran
                     </th>
-                    <th className="py-3 px-3 text-right text-indigo-950 font-bold bg-indigo-50/60 whitespace-nowrap">
+                    <th className="py-3 px-3 text-right text-indigo-950 font-bold bg-indigo-50/60 whitespace-nowrap sticky top-0 z-20 border-b border-slate-200 shadow-xs">
                       Harga Grosir
                     </th>
-                    <th className="py-3 px-3 text-right text-indigo-950 font-bold bg-indigo-50/60 border-r border-indigo-100 whitespace-nowrap">
+                    <th className="py-3 px-3 text-right text-indigo-950 font-bold bg-indigo-50/60 border-r border-indigo-100 whitespace-nowrap sticky top-0 z-20 border-b border-slate-200 shadow-xs">
                       Harga Partai
                     </th>
-                    <th className="py-3 px-3 text-right">Harga Awal</th>
+                    <th className="py-3 px-3 text-right sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Harga Awal (100%)</th>
 
                     {/* KOLOM UTAMA YANG DIANALISA: REKOMENDASI HARGA DISKON */}
-                    <th className="py-3 px-3 text-right bg-orange-100/70 text-orange-950 font-black border-x border-orange-200">
-                      ★ Rekomendasi Diskon Shopee
+                    <th className="py-3 px-3 text-right bg-orange-100/70 text-orange-950 font-black border-x border-orange-200 sticky top-0 z-20 border-b border-orange-200 shadow-xs">
+                      ★ Rekomendasi Diskon Shopee (%)
                     </th>
 
-                    <th className="py-3 px-3 text-right">Potongan MP (% + Rp)</th>
-                    <th className="py-3 px-3 text-right">Net Payout</th>
-                    <th className="py-3 px-3 text-right">Laba / Rugi Bersih</th>
-                    <th className="py-3 px-3 text-right">Margin Bersih %</th>
+                    <th className="py-3 px-3 text-right sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Potongan MP (% + Rp)</th>
+                    <th className="py-3 px-3 text-right sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Net Payout</th>
+                    <th className="py-3 px-3 text-right sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Laba / Rugi Bersih</th>
+                    <th className="py-3 px-3 text-right sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Margin Bersih %</th>
 
                     {/* KOLOM HARGA DISKON AMAN AGAR TIDAK RUGI */}
-                    <th className="py-3 px-3 text-right bg-emerald-50 text-emerald-950 font-black border-x border-emerald-200">
+                    <th className="py-3 px-3 text-right bg-emerald-50 text-emerald-950 font-black border-x border-emerald-200 sticky top-0 z-20 border-b border-emerald-200 shadow-xs">
                       Rekomendasi Harga Aman (Min)
                     </th>
 
                     {/* KOLOM HARGA DISKON PENGAJUAN FINAL */}
-                    <th className="py-3 px-3 text-right font-bold text-slate-900">
-                      Harga Diskon (Upload)
+                    <th className="py-3 px-3 text-right font-bold text-slate-900 sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">
+                      Harga Diskon (Upload) (%)
                     </th>
 
-                    <th className="py-3 px-4 text-center">Aksi Pengamanan</th>
+                    <th className="py-3 px-4 text-center sticky top-0 bg-slate-100 z-20 border-b border-slate-200 shadow-xs">Aksi Pengamanan</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-medium">
@@ -4442,12 +4632,12 @@ export default function ShopeePromoAnalyzerTab({
                           key={item.id}
                           className={`transition-colors ${
                             isSelected
-                              ? 'bg-orange-50/80 ring-2 ring-inset ring-orange-400 font-semibold text-slate-900'
+                              ? 'bg-orange-50 ring-2 ring-inset ring-orange-400 font-semibold text-slate-900'
                               : isDanger
-                              ? 'bg-red-50/80 hover:bg-red-100/70 text-red-950 font-semibold'
+                              ? 'bg-red-50 hover:bg-red-100/50 text-red-950 font-semibold'
                               : isMissingHpp
-                              ? 'bg-amber-50/40 hover:bg-amber-50 text-slate-800'
-                              : 'hover:bg-slate-50/80 text-slate-800'
+                              ? 'bg-amber-50 hover:bg-amber-100/40 text-slate-800'
+                              : 'bg-white hover:bg-slate-50 text-slate-800'
                           }`}
                         >
                           {/* CHECKBOX SELEKSI PER BARIS */}
@@ -4462,7 +4652,7 @@ export default function ShopeePromoAnalyzerTab({
                           </td>
 
                           {/* STATUS & PERINGATAN MERAH */}
-                          <td className="py-3 px-4 align-top sticky left-10 bg-inherit z-10 whitespace-nowrap">
+                          <td className="py-3 px-4 align-top sticky left-10 bg-inherit z-10 whitespace-nowrap w-[140px] border-r border-slate-200/40">
                             {isDanger ? (
                               <div className="space-y-1">
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-red-600 text-white font-black rounded-lg text-[10px] uppercase shadow-2xs">
@@ -4499,7 +4689,7 @@ export default function ShopeePromoAnalyzerTab({
                           </td>
 
                           {/* SKU STOCK LIST (5 DIGIT) & KODE SHOPEE */}
-                          <td className="py-3 px-3 align-top whitespace-nowrap">
+                          <td className="py-3 px-3 align-top sticky left-[180px] bg-inherit z-10 whitespace-nowrap border-r border-slate-200/40">
                             {item.matchedProduct ? (
                               <div className="space-y-1">
                                 <div className="flex items-center gap-1.5">
@@ -4594,12 +4784,12 @@ export default function ShopeePromoAnalyzerTab({
                           </td>
 
                           {/* NAMA PRODUK & VARIASI */}
-                          <td className="py-3 px-4 align-top max-w-[220px]">
-                            <div className="text-xs font-bold text-slate-900 truncate" title={item.productName}>
+                          <td className="py-3 px-4 align-top sticky left-[360px] bg-inherit z-10 min-w-[220px] max-w-[320px] whitespace-normal border-r border-slate-200/40">
+                            <div className="text-xs font-bold text-slate-900 leading-relaxed break-words whitespace-normal" title={item.productName}>
                               {item.productName}
                             </div>
                             {item.variationName && (
-                              <div className="text-[11px] text-slate-500 font-medium truncate mt-0.5">
+                              <div className="text-[11px] text-slate-500 font-medium break-words mt-1 leading-normal whitespace-normal" title={item.variationName}>
                                 Variasi: <span className="font-semibold text-slate-700">{item.variationName}</span>
                               </div>
                             )}
@@ -4654,10 +4844,10 @@ export default function ShopeePromoAnalyzerTab({
                             )}
                           </td>
 
-                          {/* HARGA ECERAN */}
+                            {/* HARGA ECERAN */}
                           <td className="py-3 px-3 text-right font-mono align-top text-xs whitespace-nowrap bg-indigo-50/25 text-slate-800 border-l border-indigo-100">
-                            {item.matchedProduct?.eceran ? (
-                              <span className="font-bold text-indigo-950">{formatIDR(item.matchedProduct.eceran)}</span>
+                            {a.matchedProduct?.eceran ? (
+                              <span className="font-bold text-indigo-950">{formatIDR(a.matchedProduct.eceran * (a.qtyMultiplier || 1))}</span>
                             ) : (
                               <span className="text-slate-400 text-[11px]">-</span>
                             )}
@@ -4665,8 +4855,8 @@ export default function ShopeePromoAnalyzerTab({
 
                           {/* HARGA GROSIR */}
                           <td className="py-3 px-3 text-right font-mono align-top text-xs whitespace-nowrap bg-indigo-50/25 text-slate-800">
-                            {item.matchedProduct?.grosir ? (
-                              <span className="font-bold text-indigo-950">{formatIDR(item.matchedProduct.grosir)}</span>
+                            {a.matchedProduct?.grosir ? (
+                              <span className="font-bold text-indigo-950">{formatIDR(a.matchedProduct.grosir * (a.qtyMultiplier || 1))}</span>
                             ) : (
                               <span className="text-slate-400 text-[11px]">-</span>
                             )}
@@ -4674,8 +4864,8 @@ export default function ShopeePromoAnalyzerTab({
 
                           {/* HARGA PARTAI */}
                           <td className="py-3 px-3 text-right font-mono align-top text-xs whitespace-nowrap bg-indigo-50/25 text-slate-800 border-r border-indigo-100">
-                            {item.matchedProduct?.partai ? (
-                              <span className="font-bold text-indigo-950">{formatIDR(item.matchedProduct.partai)}</span>
+                            {a.matchedProduct?.partai ? (
+                              <span className="font-bold text-indigo-950">{formatIDR(a.matchedProduct.partai * (a.qtyMultiplier || 1))}</span>
                             ) : (
                               <span className="text-slate-400 text-[11px]">-</span>
                             )}
@@ -4683,7 +4873,10 @@ export default function ShopeePromoAnalyzerTab({
 
                           {/* HARGA AWAL */}
                           <td className="py-3 px-3 text-right font-mono align-top text-slate-600 whitespace-nowrap">
-                            {formatIDR(item.originalPrice)}
+                            <div className="flex flex-col items-end">
+                              <span className="font-bold">{formatIDR(item.originalPrice)}</span>
+                              <span className="text-[9px] text-slate-400 font-bold block mt-0.5">100%</span>
+                            </div>
                           </td>
 
                           {/* KOLOM UTAMA YANG DIANALISA: REKOMENDASI HARGA DISKON SHOPEE */}
@@ -4696,6 +4889,9 @@ export default function ShopeePromoAnalyzerTab({
                                     : 'bg-orange-100 text-orange-950'
                                 }`}>
                                   {formatIDR(item.shopeeRecommendedPrice)}
+                                </span>
+                                <span className="text-[9px] text-orange-700 font-bold block mt-0.5">
+                                  {((item.shopeeRecommendedPrice / item.originalPrice) * 100).toFixed(1)}%
                                 </span>
                                 {isDanger && a.deficitPrice > 0 && (
                                   <span className="text-[9px] text-red-700 font-bold block mt-0.5">
@@ -4754,8 +4950,8 @@ export default function ShopeePromoAnalyzerTab({
                                 {formatIDR(item.promoPrice)}
                               </span>
                               {item.originalPrice > 0 && item.promoPrice > 0 && (
-                                <span className="text-[10px] text-orange-700 font-semibold">
-                                  Diskon {(((item.originalPrice - item.promoPrice) / item.originalPrice) * 100).toFixed(0)}%
+                                <span className="text-[9px] text-orange-700 font-bold block mt-0.5">
+                                  {((item.promoPrice / item.originalPrice) * 100).toFixed(1)}%
                                 </span>
                               )}
                             </div>
