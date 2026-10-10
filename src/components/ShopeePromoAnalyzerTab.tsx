@@ -222,7 +222,7 @@ export default function ShopeePromoAnalyzerTab({
   const [hematBiayaKirimRp, setHematBiayaKirimRp] = useState<number>(fees.hematBiayaKirim || 510);
 
   // Toggle & View Controls
-  const [showFeeSettings, setShowFeeSettings] = useState<boolean>(true);
+  const [showFeeSettings, setShowFeeSettings] = useState<boolean>(false);
   const [includeFixedFees, setIncludeFixedFees] = useState<boolean>(true);
   const [includePromoFees, setIncludePromoFees] = useState<boolean>(true);
   const [viewMode, setViewMode] = useState<'compact' | 'full_shopee'>('compact');
@@ -3200,7 +3200,7 @@ export default function ShopeePromoAnalyzerTab({
       {/* WORKFLOW ALUR 2 FILE EXCEL SHOPEE */}
       <div className="space-y-4">
         {/* DIAGRAM JEMBATAN PENCOCOKAN DARI 2 FILE EXCEL KE STOCK LIST */}
-        <div className="bg-gradient-to-r from-orange-50 via-indigo-50 to-blue-50 border border-indigo-200 rounded-2xl p-4 sm:p-5 shadow-xs">
+        <div className="bg-gradient-to-r from-orange-50 via-indigo-50 to-blue-50 border border-indigo-200 rounded-2xl p-4 sm:p-5 shadow-xs hidden">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
